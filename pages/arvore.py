@@ -49,6 +49,20 @@ def normalizar_texto(valor) -> str:
 
 
 
+
+
+def _formatar_quantidade_peca(quantidade, unidade='UN') -> str:
+    unidade_txt = str(unidade or 'UN').strip().upper()
+    try:
+        qtd_float = float(str(quantidade).replace(',', '.'))
+        qtd_txt = str(int(qtd_float)) if qtd_float.is_integer() else f'{qtd_float}'.replace('.', ',')
+    except Exception:
+        qtd_txt = str(quantidade or 0)
+
+    if unidade_txt in {'UN', 'PÇ', 'PÇS', 'PC', 'PCS'}:
+        return f'{qtd_txt}x'
+    return f'{qtd_txt} {unidade_txt}'
+
 def nome_truncado(nome: str, limite: int = 24) -> str:
     nome = str(nome or '')
     return nome if len(nome) <= limite else nome[:limite - 3] + '...'
@@ -117,6 +131,7 @@ def build_tree(data, mostrar_pecas: bool = True):
                     'children': [],
                     'matched': False,
                     'quantidade': quantidade,
+                    'unidade': str(peca.get('unidade') or 'UN').strip(),
                     'origem_ativo_id': str(item['id']),
                 })
 
@@ -466,12 +481,8 @@ def arvore_page():
                                     'white-space: normal; word-break: break-word; overflow-wrap: anywhere; line-height: 1.2;'
                                 )
                             if (node.get('tipo') or '').upper() == 'PECA':
-                                qtd = node.get('quantidade') or 0
-                                try:
-                                    qtd_txt = str(int(float(qtd))) if float(qtd).is_integer() else str(qtd)
-                                except Exception:
-                                    qtd_txt = str(qtd)
-                                ui.label(f"{qtd_txt}x").classes('text-[11px] px-2 py-1 rounded-full shrink-0 font-medium text-slate-700').style('background:#f1f5f9; color:#334155;')
+                                qtd_badge = _formatar_quantidade_peca(node.get('quantidade') or 0, node.get('unidade') or 'UN')
+                                ui.label(qtd_badge).classes('text-[11px] px-2 py-1 rounded-full shrink-0 font-medium text-slate-700').style('background:#f1f5f9; color:#334155;')
                             else:
                                 status_base_id = str(node['id']).split('::')[1] if str(node['id']).startswith('peca::') else str(node['id'])
                                 status_cor = estado['status_por_id'].get(status_base_id, 'green')
