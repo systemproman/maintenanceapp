@@ -190,14 +190,14 @@ def build_menu(current_route: str | None = None):
 
             for icone, titulo, rota in itens:
                 ativo = bool(rota and rota == current_route)
-                with ui.button(on_click=lambda e=None, r=rota, t=titulo: ir_para(r, t)).props(f"flat no-caps align=left {loader_props(f'ABRINDO {titulo}...')}").classes(classes_botao_menu(ativo)):
+                with ui.button(on_click=lambda e=None, r=rota, t=titulo: ir_para(r, t)).props("flat no-caps align=left").classes(classes_botao_menu(ativo)):
                     with ui.row().classes('items-center w-full no-wrap'):
                         ui.icon(icone).classes('text-[20px] shrink-0')
                         if aberta:
                             ui.label(titulo).classes('ml-3 text-sm truncate')
 
             ui.separator().classes('my-2 bg-white/10')
-            with ui.button(on_click=logout).props(f"flat no-caps align=left {loader_props('SAINDO...')}").classes(classes_botao_logout()):
+            with ui.button(on_click=logout).props("flat no-caps align=left").classes(classes_botao_logout()):
                 with ui.row().classes('items-center w-full no-wrap'):
                     ui.icon('logout').classes('text-[20px]')
                     if aberta:
