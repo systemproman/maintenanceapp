@@ -75,6 +75,17 @@ def _styles():
         .nice-field .q-field__control { min-height:58px !important; border-radius:18px !important; background:var(--field-bg) !important; border:1px solid var(--field-border) !important; }
         .nice-field .q-field__native, .nice-field input { color:var(--field-text) !important; font-size:15px !important; font-weight:600 !important; caret-color:var(--field-caret) !important; }
         .nice-field .q-field__native::selection, .nice-field input::selection { background: transparent !important; color: var(--field-text) !important; }
+        .nice-field input:-webkit-autofill,
+        .nice-field input:-webkit-autofill:hover,
+        .nice-field input:-webkit-autofill:focus,
+        .nice-field input:-webkit-autofill:active {
+            -webkit-text-fill-color: var(--field-text) !important;
+            caret-color: var(--field-caret) !important;
+            -webkit-box-shadow: 0 0 0 1000px var(--field-bg) inset !important;
+            box-shadow: 0 0 0 1000px var(--field-bg) inset !important;
+            border-radius: 18px !important;
+            transition: background-color 999999s ease-in-out 0s !important;
+        }
         .nice-field .q-field__control:before, .nice-field .q-field__control:after { display:none !important; }
         .error-box { width:100%; box-sizing:border-box; border-radius:14px; padding:10px 12px; text-align:center; font-size:13px; font-weight:800; color:var(--error-text); background:var(--error-bg); border:1px solid var(--error-border); }
         .q-btn.login-button { width:100% !important; min-height:54px !important; border-radius:20px !important; background:linear-gradient(135deg, var(--button-bg-1), var(--button-bg-2)) !important; color:var(--button-text) !important; font-size:17px !important; font-weight:900 !important; box-shadow:0 10px 24px var(--button-shadow) !important; }

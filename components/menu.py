@@ -83,6 +83,11 @@ def ensure_page_loader():
         if (el) el.classList.remove('visible');
         document.body.classList.remove('fsl-busy');
       };
+      window.addEventListener('load', () => {
+        if (window.fslHidePageLoader) {
+          window.fslHidePageLoader();
+        }
+      });
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', window.fslEnsurePageLoader, {once: true});
       } else {
@@ -140,7 +145,7 @@ def build_menu(current_route: str | None = None):
     def ir_para(rota, titulo):
         if rota:
             show_page_loader(f'ABRINDO {titulo}...')
-            ui.timer(0.05, lambda: ui.navigate.to(rota), once=True)
+            ui.navigate.to(rota)
         else:
             ui.notify(f'{titulo} em breve', type='warning')
 
