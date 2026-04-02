@@ -301,13 +301,53 @@ class CompatCursor:
         return getattr(self._cursor, name)
 
 
+def _is_connection_closed_error(ex: Exception) -> bool:
+    msg = str(ex or '').strip().lower()
+    return any(token in msg for token in (
+        'connection is closed',
+        'the connection is closed',
+        'closed the connection',
+        'cannot operate on a closed database',
+        'connection already closed',
+    ))
+
+
 class CompatConnection:
-    def __init__(self, backend: str, raw_conn):
+    def __init__(self, backend: str, raw_conn, raw_factory=None):
         self.backend = backend
         self._conn = raw_conn
+        self._raw_factory = raw_factory
+
+    def _reconnect(self):
+        if not self._raw_factory:
+            raise RuntimeError('Factory de conexão não configurada.')
+        try:
+            if self._conn is not None:
+                self._conn.close()
+        except Exception:
+            pass
+        self._conn = self._raw_factory()
+        return self._conn
+
+    def _ensure_open(self):
+        if self._conn is None:
+            self._reconnect()
+            return
+        try:
+            if getattr(self._conn, 'closed', False):
+                self._reconnect()
+        except Exception:
+            pass
 
     def cursor(self):
-        return CompatCursor(self._conn.cursor(), self.backend)
+        self._ensure_open()
+        try:
+            return CompatCursor(self._conn.cursor(), self.backend)
+        except Exception as ex:
+            if _is_connection_closed_error(ex):
+                self._reconnect()
+                return CompatCursor(self._conn.cursor(), self.backend)
+            raise
 
     def execute(self, query, params=None):
         cur = self.cursor()
@@ -315,41 +355,39 @@ class CompatConnection:
         return cur
 
     def commit(self):
-        self._conn.commit()
+        self._ensure_open()
+        try:
+            self._conn.commit()
+        except Exception as ex:
+            if _is_connection_closed_error(ex):
+                self._reconnect()
+                self._conn.commit()
+                return
+            raise
 
     def rollback(self):
-        self._conn.rollback()
+        try:
+            self._ensure_open()
+            self._conn.rollback()
+        except Exception:
+            pass
 
     def close(self):
-        self._conn.close()
+        try:
+            if self._conn is not None:
+                self._conn.close()
+        finally:
+            self._conn = None
 
 
-if DB_MODE == 'sqlite':
-    raw_conn = sqlite3.connect(SQLITE_PATH, check_same_thread=False)
-    raw_conn.row_factory = sqlite3.Row
-    raw_conn.execute('PRAGMA foreign_keys = ON')
-    conn = CompatConnection('sqlite', raw_conn)
-elif DB_MODE in {'postgres', 'postgresql'}:
-    if not DATABASE_URL:
-        raise RuntimeError('DATABASE_URL não informado para DB_MODE=postgres.')
-    try:
-        import psycopg
-        from psycopg.rows import dict_row
-    except Exception as ex:
-        raise RuntimeError('Instale psycopg[binary] para usar Supabase/Postgres.') from ex
-    raw_conn = psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False)
-    conn = CompatConnection('postgres', raw_conn)
-else:
-    raise RuntimeError(f'DB_MODE inválido: {DB_MODE}')
-
-
-def get_connection():
+def _make_raw_connection():
     if DB_MODE == 'sqlite':
         raw_conn = sqlite3.connect(SQLITE_PATH, check_same_thread=False)
         raw_conn.row_factory = sqlite3.Row
         raw_conn.execute('PRAGMA foreign_keys = ON')
-        return CompatConnection('sqlite', raw_conn)
-    elif DB_MODE in {'postgres', 'postgresql'}:
+        return raw_conn
+
+    if DB_MODE in {'postgres', 'postgresql'}:
         if not DATABASE_URL:
             raise RuntimeError('DATABASE_URL não informado para DB_MODE=postgres.')
         try:
@@ -357,10 +395,21 @@ def get_connection():
             from psycopg.rows import dict_row
         except Exception as ex:
             raise RuntimeError('Instale psycopg[binary] para usar Supabase/Postgres.') from ex
-        raw_conn = psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False)
-        return CompatConnection('postgres', raw_conn)
-    else:
-        raise RuntimeError(f'DB_MODE inválido: {DB_MODE}')
+        return psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False)
+
+    raise RuntimeError(f'DB_MODE inválido: {DB_MODE}')
+
+
+def _create_connection() -> CompatConnection:
+    backend = 'sqlite' if DB_MODE == 'sqlite' else 'postgres'
+    return CompatConnection(backend, _make_raw_connection(), raw_factory=_make_raw_connection)
+
+
+conn = _create_connection()
+
+
+def get_connection():
+    return _create_connection()
 
 
 
@@ -1890,40 +1939,19 @@ def autenticar_usuario(username: str, password: str):
     password = str(password or '').strip()
     if not username:
         return False, 'Informe o usuário.', None
-
-    local_conn = None
-    try:
-        local_conn = get_connection()
-        cur = local_conn.cursor()
-        cur.execute("""
-            SELECT u.*, f.nome AS nome_funcionario
-            FROM usuarios u
-            LEFT JOIN funcionarios f ON f.id = u.funcionario_id
-            WHERE lower(u.username) = ? AND u.ativo = 1
-        """, (username,))
-        row = cur.fetchone()
-
-        if not row:
-            return False, 'Usuário não encontrado.', None
-        if str(row['password'] or '') != password:
-            return False, 'Senha incorreta.', None
-
-        return True, '', dict(row)
-
-    except Exception as ex:
-        try:
-            if local_conn:
-                local_conn.rollback()
-        except Exception:
-            pass
-        return False, f'Erro no login: {str(ex)}', None
-
-    finally:
-        try:
-            if local_conn:
-                local_conn.close()
-        except Exception:
-            pass
+    cur = _cursor()
+    cur.execute("""
+        SELECT u.*, f.nome AS nome_funcionario
+        FROM usuarios u
+        LEFT JOIN funcionarios f ON f.id = u.funcionario_id
+        WHERE lower(u.username) = ? AND u.ativo = 1
+    """, (username,))
+    row = cur.fetchone()
+    if not row:
+        return False, 'Usuário não encontrado.', None
+    if str(row['password'] or '') != password:
+        return False, 'Senha incorreta.', None
+    return True, '', dict(row)
 
 
 def alterar_senha_usuario(usuario_id: str, nova_senha: str, deve_trocar: bool = False):
