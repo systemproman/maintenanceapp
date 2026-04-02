@@ -344,7 +344,23 @@ else:
 
 
 def get_connection():
-    return conn
+    if DB_MODE == 'sqlite':
+        raw_conn = sqlite3.connect(SQLITE_PATH, check_same_thread=False)
+        raw_conn.row_factory = sqlite3.Row
+        raw_conn.execute('PRAGMA foreign_keys = ON')
+        return CompatConnection('sqlite', raw_conn)
+    elif DB_MODE in {'postgres', 'postgresql'}:
+        if not DATABASE_URL:
+            raise RuntimeError('DATABASE_URL não informado para DB_MODE=postgres.')
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except Exception as ex:
+            raise RuntimeError('Instale psycopg[binary] para usar Supabase/Postgres.') from ex
+        raw_conn = psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False)
+        return CompatConnection('postgres', raw_conn)
+    else:
+        raise RuntimeError(f'DB_MODE inválido: {DB_MODE}')
 
 
 
@@ -1874,19 +1890,40 @@ def autenticar_usuario(username: str, password: str):
     password = str(password or '').strip()
     if not username:
         return False, 'Informe o usuário.', None
-    cur = _cursor()
-    cur.execute("""
-        SELECT u.*, f.nome AS nome_funcionario
-        FROM usuarios u
-        LEFT JOIN funcionarios f ON f.id = u.funcionario_id
-        WHERE lower(u.username) = ? AND u.ativo = 1
-    """, (username,))
-    row = cur.fetchone()
-    if not row:
-        return False, 'Usuário não encontrado.', None
-    if str(row['password'] or '') != password:
-        return False, 'Senha incorreta.', None
-    return True, '', dict(row)
+
+    local_conn = None
+    try:
+        local_conn = get_connection()
+        cur = local_conn.cursor()
+        cur.execute("""
+            SELECT u.*, f.nome AS nome_funcionario
+            FROM usuarios u
+            LEFT JOIN funcionarios f ON f.id = u.funcionario_id
+            WHERE lower(u.username) = ? AND u.ativo = 1
+        """, (username,))
+        row = cur.fetchone()
+
+        if not row:
+            return False, 'Usuário não encontrado.', None
+        if str(row['password'] or '') != password:
+            return False, 'Senha incorreta.', None
+
+        return True, '', dict(row)
+
+    except Exception as ex:
+        try:
+            if local_conn:
+                local_conn.rollback()
+        except Exception:
+            pass
+        return False, f'Erro no login: {str(ex)}', None
+
+    finally:
+        try:
+            if local_conn:
+                local_conn.close()
+        except Exception:
+            pass
 
 
 def alterar_senha_usuario(usuario_id: str, nova_senha: str, deve_trocar: bool = False):

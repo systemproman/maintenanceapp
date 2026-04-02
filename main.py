@@ -97,23 +97,29 @@ def baixar_arquivo(anexo_id: str, nome: str):
 
 @app.get('/ping')
 def ping():
+    conn = None
     try:
         conn = get_connection()
         conn.execute('SELECT 1')
         return {'status': 'ok', 'db': 'ok'}
     except Exception as e:
         return {'status': 'erro', 'erro': str(e)}, 500
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
 
 
 def _protect_page(body_fn):
     if not require_auth():
         ui.navigate.to('/')
-        return False
+        return
     if needs_password_change():
         ui.navigate.to('/trocar-senha')
-        return False
+        return
     body_fn()
-    return True
 
 
 @ui.page('/')
