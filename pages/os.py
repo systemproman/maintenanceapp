@@ -421,7 +421,6 @@ def _gerar_pdf_os(item: dict, totais: dict, atividades: list, materiais: list, a
 
 
 def os_page():
-    show_page_loader('CARREGANDO PÁGINA...')
     editavel = can_edit()
     estado = {'os_id': app.storage.user.get('os_selected_id')}
     lista_cache = []

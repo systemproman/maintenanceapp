@@ -12,7 +12,6 @@ def _fmt_brl(valor):
 
 
 def usuarios_page():
-    show_page_loader('CARREGANDO PÁGINA...')
     editavel = can_edit()
     with ui.row().classes('w-full h-screen no-wrap bg-slate-100'):
         build_menu('/usuarios')

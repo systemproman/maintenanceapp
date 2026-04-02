@@ -3,7 +3,6 @@ from components.menu import build_menu, show_page_loader, hide_page_loader
 
 
 def build_home_page():
-    show_page_loader('CARREGANDO PÁGINA...')
     nome = str(app.storage.user.get('name') or 'USUÁRIO').upper()
 
     ui.add_head_html('''

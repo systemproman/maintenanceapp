@@ -304,7 +304,6 @@ def _os_status_badge_style(status: str) -> str:
     return 'background:#e2e8f0; color:#334155;'
 
 def arvore_page():
-    show_page_loader('CARREGANDO PÁGINA...')
     ui.add_head_html(BUSCA_NEUTRA_CSS)
 
     estado = {

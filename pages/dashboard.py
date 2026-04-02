@@ -192,7 +192,6 @@ def _periodo_do_mes(ano_mes: str):
 
 
 def dashboard_page():
-    show_page_loader('CARREGANDO PÁGINA...')
     ui.add_head_html("""
     <style>
         .dash-scroll { width: 100%; height: 100%; overflow: auto; }

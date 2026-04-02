@@ -22,18 +22,18 @@ def ensure_page_loader():
       #fsl-page-loader {
         position: fixed; inset: 0; z-index: 99999;
         display: flex; align-items: center; justify-content: center;
-        background: rgba(241,245,249,.62); backdrop-filter: blur(2px);
+        background: rgba(15,23,42,.18); backdrop-filter: blur(2px);
         opacity: 0; visibility: hidden; pointer-events: none;
-        transition: opacity .12s ease, visibility .12s ease;
+        transition: opacity .16s ease, visibility .16s ease;
       }
       #fsl-page-loader.visible {
         opacity: 1; visibility: visible; pointer-events: all;
       }
       #fsl-page-loader-card {
-        min-width: 200px; max-width: 320px;
+        min-width: 220px; max-width: 340px;
         background: rgba(255,255,255,.98);
-        border: 1px solid rgba(148,163,184,.24);
-        border-radius: 20px;
+        border: 1px solid rgba(148,163,184,.22);
+        border-radius: 22px;
         box-shadow: 0 18px 50px rgba(15,23,42,.18);
         padding: 24px 28px;
         display:flex; flex-direction:column; align-items:center; gap:12px;
@@ -113,10 +113,10 @@ def hide_page_loader():
 
 
 def loader_props(texto: str = 'CARREGANDO...') -> str:
-    texto_js = str(texto or 'CARREGANDO...').replace('\\', '\\\\').replace("'", "\\'")
+    texto_js = str(texto or 'CARREGANDO...').replace('\', '\\').replace("'", "\'")
     return (
-        f'onmousedown="window.fslShowPageLoader(\'{texto_js}\')" '
-        f'ontouchstart="window.fslShowPageLoader(\'{texto_js}\')" '
+        f'onclick="setTimeout(function(){{window.fslShowPageLoader('{texto_js}');}}, 0)" '
+        f'ontouchend="setTimeout(function(){{window.fslShowPageLoader('{texto_js}');}}, 0)"'
     )
 
 
@@ -143,13 +143,14 @@ def build_menu(current_route: str | None = None):
 
     def ir_para(rota, titulo):
         if rota:
-            show_page_loader(f'ABRINDO {titulo}...')
+            show_page_loader('CARREGANDO...')
             ui.navigate.to(rota)
         else:
             ui.notify(f'{titulo} em breve', type='warning')
 
     def logout():
         from auth import logout as auth_logout
+        show_page_loader('SAINDO...')
         auth_logout()
 
     def toggle_sidebar():
@@ -190,14 +191,14 @@ def build_menu(current_route: str | None = None):
 
             for icone, titulo, rota in itens:
                 ativo = bool(rota and rota == current_route)
-                with ui.button(on_click=lambda e=None, r=rota, t=titulo: ir_para(r, t)).props("flat no-caps align=left").classes(classes_botao_menu(ativo)):
+                with ui.button(on_click=lambda e=None, r=rota, t=titulo: ir_para(r, t)).props('flat no-caps align=left').classes(classes_botao_menu(ativo)):
                     with ui.row().classes('items-center w-full no-wrap'):
                         ui.icon(icone).classes('text-[20px] shrink-0')
                         if aberta:
                             ui.label(titulo).classes('ml-3 text-sm truncate')
 
             ui.separator().classes('my-2 bg-white/10')
-            with ui.button(on_click=logout).props("flat no-caps align=left").classes(classes_botao_logout()):
+            with ui.button(on_click=logout).props('flat no-caps align=left').classes(classes_botao_logout()):
                 with ui.row().classes('items-center w-full no-wrap'):
                     ui.icon('logout').classes('text-[20px]')
                     if aberta:

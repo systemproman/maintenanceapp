@@ -189,7 +189,6 @@ def _copiar_pecas_lista(linhas):
 
 
 def equipamentos_page():
-    show_page_loader('CARREGANDO PÁGINA...')
     ui.add_head_html(BUSCA_NEUTRA_CSS)
     with ui.row().classes('w-full h-screen no-wrap bg-slate-100'):
         build_menu('/equipamentos')
