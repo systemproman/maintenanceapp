@@ -56,7 +56,6 @@ def ensure_page_loader():
         if (document.getElementById('fsl-page-loader')) return;
         const wrap = document.createElement('div');
         wrap.id = 'fsl-page-loader';
-        wrap.className = 'visible';
         wrap.innerHTML = `
           <div id="fsl-page-loader-card">
             <div id="fsl-page-loader-spinner"></div>
@@ -79,20 +78,20 @@ def ensure_page_loader():
         if (el) el.classList.remove('visible');
         document.body.classList.remove('fsl-busy');
       };
-      window.addEventListener('load', () => {
-        if (window.fslHidePageLoader) {
-          window.fslHidePageLoader();
-        }
+      window.addEventListener('load', function() {
+        if (window.fslHidePageLoader) window.fslHidePageLoader();
       });
-      window.addEventListener('pageshow', () => {
-        if (window.fslHidePageLoader) {
-          window.fslHidePageLoader();
-        }
+      window.addEventListener('pageshow', function() {
+        if (window.fslHidePageLoader) window.fslHidePageLoader();
       });
       if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', window.fslEnsurePageLoader, {once: true});
+        document.addEventListener('DOMContentLoaded', function() {
+          window.fslEnsurePageLoader();
+          window.fslHidePageLoader();
+        }, {once: true});
       } else {
         window.fslEnsurePageLoader();
+        window.fslHidePageLoader();
       }
     </script>
     """)
@@ -116,10 +115,10 @@ def hide_page_loader():
 def loader_props(texto: str = 'CARREGANDO...') -> str:
     texto_js = str(texto or 'CARREGANDO...').replace('\\', '\\\\').replace("'", "\\'")
     return (
-        f'onmousedown="window.fslShowPageLoader(\'{texto_js}\')" ' 
-        f'ontouchstart="window.fslShowPageLoader(\'{texto_js}\')" ' 
-        f'onclick="window.fslShowPageLoader(\'{texto_js}\')"'
+        f'onmousedown="window.fslShowPageLoader(\'{texto_js}\')" '
+        f'ontouchstart="window.fslShowPageLoader(\'{texto_js}\')" '
     )
+
 
 def build_menu(current_route: str | None = None):
     ensure_page_loader()
