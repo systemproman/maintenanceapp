@@ -1,7 +1,6 @@
 from nicegui import ui, app
 
 SIDEBAR_OPEN_KEY = 'sidebar_open'
-LOADER_BOOT_KEY = '_page_loader_bootstrapped'
 
 
 def _sidebar_aberta() -> bool:
@@ -18,9 +17,6 @@ def _is_read_only() -> bool:
 
 
 def ensure_page_loader():
-    if app.storage.user.get(LOADER_BOOT_KEY):
-        return
-
     ui.add_head_html("""
     <style>
       #fsl-page-loader {
@@ -88,6 +84,11 @@ def ensure_page_loader():
           window.fslHidePageLoader();
         }
       });
+      window.addEventListener('pageshow', () => {
+        if (window.fslHidePageLoader) {
+          window.fslHidePageLoader();
+        }
+      });
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', window.fslEnsurePageLoader, {once: true});
       } else {
@@ -96,7 +97,6 @@ def ensure_page_loader():
     </script>
     """)
 
-    app.storage.user[LOADER_BOOT_KEY] = True
 
 def show_page_loader(texto: str = 'CARREGANDO...'):
     ensure_page_loader()
