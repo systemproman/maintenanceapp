@@ -5,3 +5,4 @@ reportlab
 requests
 fastapi
 uvicorn
+openpyxl
