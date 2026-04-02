@@ -421,6 +421,7 @@ def _gerar_pdf_os(item: dict, totais: dict, atividades: list, materiais: list, a
 
 
 def os_page():
+    show_page_loader('CARREGANDO PÁGINA...')
     editavel = can_edit()
     estado = {'os_id': app.storage.user.get('os_selected_id')}
     lista_cache = []
@@ -471,10 +472,14 @@ def os_page():
         os_id_atual = _get_os_id()
         if os_id_atual:
             detalhe_cache.pop(str(os_id_atual), None)
+        detalhe_cache.clear()
+
         def _job():
-            render_detalhe(force=True)
             if reload_list:
                 carregar_lista(force=True)
+            render_detalhe(force=True)
+            render_lista()
+
         _run_busy(_job, texto)
 
     def box(titulo, valor):
@@ -884,14 +889,20 @@ def os_page():
             def salvar():
                 try:
                     if editando:
-                        db.atualizar_os(item['id'], alvo.value, descricao.value, tipo_os.value, None, observacoes.value,
-                                        status.value, justificativa.value, data_abertura.value, medidor_toggle.value, medidor.value)
+                        os_salva = db.atualizar_os(item['id'], alvo.value, descricao.value, tipo_os.value, None, observacoes.value,
+                                                   status.value, justificativa.value, data_abertura.value, medidor_toggle.value, medidor.value)
                     else:
-                        db.criar_os(alvo.value, descricao.value, tipo_os.value, None, observacoes.value,
-                                    numero.value, data_abertura.value, medidor_toggle.value, medidor.value, status.value, justificativa.value)
+                        os_salva = db.criar_os(alvo.value, descricao.value, tipo_os.value, None, observacoes.value,
+                                               numero.value, data_abertura.value, medidor_toggle.value, medidor.value, status.value, justificativa.value)
+
+                    os_salva_id = (os_salva or {}).get('id') if isinstance(os_salva, dict) else None
+                    if os_salva_id:
+                        _set_os_id(os_salva_id)
+                    elif editando and item.get('id'):
+                        _set_os_id(item['id'])
+
                     dialog.close()
-                    carregar_lista()
-                    render_detalhe()
+                    refresh_current_os(reload_list=True, texto='ATUALIZANDO OS...')
                     ui.notify('OS SALVA', type='positive')
                 except Exception as ex:
                     ui.notify(str(ex), type='negative')
