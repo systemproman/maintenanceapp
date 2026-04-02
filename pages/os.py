@@ -13,7 +13,7 @@ from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Tabl
 
 
 from auth import can_edit
-from components.menu import build_menu, show_page_loader, hide_page_loader, loader_props
+from components.menu import build_menu, show_page_loader, hide_page_loader
 from services import db
 
 TIPOS_OS = ['CORRETIVA', 'PREVENTIVA', 'PREVENTIVA PERIÓDICA', 'MELHORIA']
@@ -437,10 +437,10 @@ def os_page():
                         ui.label('ORDEM DE SERVIÇO').classes('text-xs text-slate-500')
                     with ui.row().classes('items-center gap-2'):
                         busca = ui.input(placeholder='BUSCAR NÚMERO, TAG, DESCRIÇÃO...').props('outlined dense clearable').classes('w-[420px]')
-                        ui.button(icon='search', on_click=lambda: _run_busy(carregar_lista, 'CARREGANDO OS...')).props(f"flat round dense {loader_props('CARREGANDO OS...')}")
+                        ui.button(icon='search', on_click=lambda: _run_busy(carregar_lista, 'CARREGANDO OS...')).props('flat round dense')
                         if editavel:
-                            ui.button('NOVA OS', icon='add', on_click=lambda: abrir_form_os()).props(f"unelevated {loader_props('ABRINDO FORMULÁRIO...')}").classes('bg-amber-500 text-black font-bold')
-                        ui.button(icon='refresh', on_click=lambda: _run_busy(carregar_lista, 'ATUALIZANDO OS...')).props(f"flat round dense {loader_props('ATUALIZANDO OS...')}")
+                            ui.button('NOVA OS', icon='add', on_click=lambda: abrir_form_os()).props('unelevated').classes('bg-amber-500 text-black font-bold')
+                        ui.button(icon='refresh', on_click=lambda: _run_busy(carregar_lista, 'ATUALIZANDO OS...')).props('flat round dense')
             with ui.row().classes('w-full flex-1 gap-4 overflow-hidden'):
                 lista = ui.column().classes('w-[32%] h-full gap-3 overflow-auto')
                 detalhe = ui.column().classes('flex-1 h-full gap-3 overflow-auto')
@@ -472,14 +472,10 @@ def os_page():
         os_id_atual = _get_os_id()
         if os_id_atual:
             detalhe_cache.pop(str(os_id_atual), None)
-        detalhe_cache.clear()
-
         def _job():
+            render_detalhe(force=True)
             if reload_list:
                 carregar_lista(force=True)
-            render_detalhe(force=True)
-            render_lista()
-
         _run_busy(_job, texto)
 
     def box(titulo, valor):
@@ -508,7 +504,7 @@ def os_page():
                 selecionada = str(_get_os_id() or '') == str(item['id'])
                 card_cls = 'w-full rounded-xl shadow-none p-4 cursor-pointer transition-all '
                 card_cls += 'border-2 border-amber-400 bg-amber-50' if selecionada else 'border border-slate-200 bg-white'
-                with ui.card().classes(card_cls).props(loader_props('ABRINDO OS...')).on('click', lambda e=None, i=item: selecionar_os(i['id'])):
+                with ui.card().classes(card_cls).on('click', lambda e=None, i=item: selecionar_os(i['id'])):
                     with ui.row().classes('w-full items-start justify-between'):
                         with ui.column().classes('gap-0'):
                             ui.label(tag_destaque).classes('text-lg font-black text-slate-900')
@@ -889,20 +885,14 @@ def os_page():
             def salvar():
                 try:
                     if editando:
-                        os_salva = db.atualizar_os(item['id'], alvo.value, descricao.value, tipo_os.value, None, observacoes.value,
-                                                   status.value, justificativa.value, data_abertura.value, medidor_toggle.value, medidor.value)
+                        db.atualizar_os(item['id'], alvo.value, descricao.value, tipo_os.value, None, observacoes.value,
+                                        status.value, justificativa.value, data_abertura.value, medidor_toggle.value, medidor.value)
                     else:
-                        os_salva = db.criar_os(alvo.value, descricao.value, tipo_os.value, None, observacoes.value,
-                                               numero.value, data_abertura.value, medidor_toggle.value, medidor.value, status.value, justificativa.value)
-
-                    os_salva_id = (os_salva or {}).get('id') if isinstance(os_salva, dict) else None
-                    if os_salva_id:
-                        _set_os_id(os_salva_id)
-                    elif editando and item.get('id'):
-                        _set_os_id(item['id'])
-
+                        db.criar_os(alvo.value, descricao.value, tipo_os.value, None, observacoes.value,
+                                    numero.value, data_abertura.value, medidor_toggle.value, medidor.value, status.value, justificativa.value)
                     dialog.close()
-                    refresh_current_os(reload_list=True, texto='ATUALIZANDO OS...')
+                    carregar_lista()
+                    render_detalhe()
                     ui.notify('OS SALVA', type='positive')
                 except Exception as ex:
                     ui.notify(str(ex), type='negative')
