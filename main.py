@@ -16,7 +16,7 @@ from pages.equipes import equipes_page
 from pages.funcionarios import funcionarios_page
 from pages.usuarios import usuarios_page
 from pages.dashboard import dashboard_page
-from services.db import get_anexo
+from services.db import get_anexo, get_connection
 
 
 Path('assets').mkdir(parents=True, exist_ok=True)
@@ -93,6 +93,16 @@ def baixar_arquivo(anexo_id: str, nome: str):
         media_type=media_type,
         content_disposition_type='attachment',
     )
+
+
+@app.get('/ping')
+def ping():
+    try:
+        conn = get_connection()
+        conn.execute('SELECT 1')
+        return {'status': 'ok', 'db': 'ok'}
+    except Exception as e:
+        return {'status': 'erro', 'erro': str(e)}, 500
 
 
 def _protect_page(body_fn):

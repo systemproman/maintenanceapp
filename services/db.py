@@ -343,6 +343,10 @@ else:
     raise RuntimeError(f'DB_MODE inválido: {DB_MODE}')
 
 
+def get_connection():
+    return conn
+
+
 
 def _ensure_postgres_compat():
     if getattr(conn, 'backend', '') != 'postgres':
