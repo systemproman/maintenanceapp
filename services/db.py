@@ -302,11 +302,39 @@ class CompatCursor:
 
 
 class CompatConnection:
-    def __init__(self, backend: str, raw_conn):
+    def __init__(self, backend: str, raw_conn, connector=None):
         self.backend = backend
         self._conn = raw_conn
+        self._connector = connector
+
+    def _reconnect(self):
+        if not self._connector:
+            raise RuntimeError('Conexão indisponível e sem rotina de reconexão.')
+        try:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = self._connector()
+        except Exception:
+            raise
+
+    def _ensure_alive(self):
+        if self.backend != 'postgres':
+            return
+        try:
+            closed = getattr(self._conn, 'closed', False)
+            if closed:
+                self._reconnect()
+                return
+            cur = self._conn.cursor()
+            cur.execute('SELECT 1')
+            cur.fetchone()
+        except Exception:
+            self._reconnect()
 
     def cursor(self):
+        self._ensure_alive()
         return CompatCursor(self._conn.cursor(), self.backend)
 
     def execute(self, query, params=None):
@@ -315,21 +343,28 @@ class CompatConnection:
         return cur
 
     def commit(self):
+        self._ensure_alive()
         self._conn.commit()
 
     def rollback(self):
-        self._conn.rollback()
+        try:
+            self._conn.rollback()
+        except Exception:
+            if self.backend == 'postgres':
+                self._reconnect()
 
     def close(self):
         self._conn.close()
 
 
-if DB_MODE == 'sqlite':
+def _new_sqlite_connection():
     raw_conn = sqlite3.connect(SQLITE_PATH, check_same_thread=False)
     raw_conn.row_factory = sqlite3.Row
     raw_conn.execute('PRAGMA foreign_keys = ON')
-    conn = CompatConnection('sqlite', raw_conn)
-elif DB_MODE in {'postgres', 'postgresql'}:
+    return raw_conn
+
+
+def _new_postgres_connection():
     if not DATABASE_URL:
         raise RuntimeError('DATABASE_URL não informado para DB_MODE=postgres.')
     try:
@@ -337,8 +372,15 @@ elif DB_MODE in {'postgres', 'postgresql'}:
         from psycopg.rows import dict_row
     except Exception as ex:
         raise RuntimeError('Instale psycopg[binary] para usar Supabase/Postgres.') from ex
-    raw_conn = psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False)
-    conn = CompatConnection('postgres', raw_conn)
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False)
+
+
+if DB_MODE == 'sqlite':
+    raw_conn = _new_sqlite_connection()
+    conn = CompatConnection('sqlite', raw_conn, connector=_new_sqlite_connection)
+elif DB_MODE in {'postgres', 'postgresql'}:
+    raw_conn = _new_postgres_connection()
+    conn = CompatConnection('postgres', raw_conn, connector=_new_postgres_connection)
 else:
     raise RuntimeError(f'DB_MODE inválido: {DB_MODE}')
 
@@ -361,6 +403,10 @@ def _ensure_postgres_compat():
 
 
 _ensure_postgres_compat()
+
+
+def get_connection():
+    return conn
 
 
 def _upper(value) -> str:
@@ -4918,7 +4964,3 @@ def get_os_detalhe(os_id: str):
         'anexos': anexos,
         'totais': totais,
     }
-
-
-def get_connection():
-    return conn
