@@ -225,9 +225,10 @@ class CompatRow(dict):
 
 
 class CompatCursor:
-    def __init__(self, cursor, backend: str):
+    def __init__(self, cursor, backend: str, owner=None):
         self._cursor = cursor
         self._backend = backend
+        self._owner = owner
         self._last_columns = []
 
     def _translate(self, query: str):
@@ -254,32 +255,48 @@ class CompatCursor:
 
     def execute(self, query, params=None):
         sql = self._translate(query)
-        try:
-            if params is None:
-                self._cursor.execute(sql)
-            else:
-                self._cursor.execute(sql, params)
-        except Exception:
-            if self._backend == 'postgres':
-                try:
-                    self._cursor.connection.rollback()
-                except Exception:
-                    pass
-            raise
+        tried_reconnect = False
+        while True:
+            try:
+                if params is None:
+                    self._cursor.execute(sql)
+                else:
+                    self._cursor.execute(sql, params)
+                break
+            except Exception:
+                if self._backend == 'postgres':
+                    try:
+                        self._cursor.connection.rollback()
+                    except Exception:
+                        pass
+                    if self._owner is not None and not tried_reconnect:
+                        tried_reconnect = True
+                        self._owner._reconnect()
+                        self._cursor = self._owner._conn.cursor()
+                        continue
+                raise
         self._last_columns = [d[0] for d in (self._cursor.description or [])]
         return self
 
     def executemany(self, query, seq_of_params):
         sql = self._translate(query)
-        try:
-            self._cursor.executemany(sql, seq_of_params)
-        except Exception:
-            if self._backend == 'postgres':
-                try:
-                    self._cursor.connection.rollback()
-                except Exception:
-                    pass
-            raise
+        tried_reconnect = False
+        while True:
+            try:
+                self._cursor.executemany(sql, seq_of_params)
+                break
+            except Exception:
+                if self._backend == 'postgres':
+                    try:
+                        self._cursor.connection.rollback()
+                    except Exception:
+                        pass
+                    if self._owner is not None and not tried_reconnect:
+                        tried_reconnect = True
+                        self._owner._reconnect()
+                        self._cursor = self._owner._conn.cursor()
+                        continue
+                raise
         self._last_columns = [d[0] for d in (self._cursor.description or [])]
         return self
 
@@ -335,7 +352,7 @@ class CompatConnection:
 
     def cursor(self):
         self._ensure_alive()
-        return CompatCursor(self._conn.cursor(), self.backend)
+        return CompatCursor(self._conn.cursor(), self.backend, owner=self)
 
     def execute(self, query, params=None):
         cur = self.cursor()
@@ -418,7 +435,7 @@ def _text(value) -> str:
 
 
 def _cursor():
-    return conn.cursor()
+    return get_connection().cursor()
 
 
 def _get_columns(table_name: str) -> set[str]:

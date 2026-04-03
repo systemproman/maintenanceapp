@@ -16,7 +16,7 @@ from pages.equipes import equipes_page
 from pages.funcionarios import funcionarios_page
 from pages.usuarios import usuarios_page
 from pages.dashboard import dashboard_page
-from services.db import get_anexo, conn, get_connection
+from services.db import get_anexo, get_connection
 
 
 # pastas
@@ -165,7 +165,7 @@ def page_dashboard():
 
 
 # 🔥 CONFIG RENDER
-PORT = int(os.environ['PORT'])
+PORT = int(os.environ.get('PORT', 8080))
 HOST = '0.0.0.0'
 
 print(f'🚀 INICIANDO APP EM {HOST}:{PORT}')
