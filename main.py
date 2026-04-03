@@ -4,7 +4,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from fastapi import HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from nicegui import app, ui
 
 from auth import build_login_page, build_change_password_page, require_auth, needs_password_change
@@ -16,7 +16,7 @@ from pages.equipes import equipes_page
 from pages.funcionarios import funcionarios_page
 from pages.usuarios import usuarios_page
 from pages.dashboard import dashboard_page
-from services.db import get_anexo, get_connection
+from services.db import get_anexo
 
 
 Path('assets').mkdir(parents=True, exist_ok=True)
@@ -95,31 +95,15 @@ def baixar_arquivo(anexo_id: str, nome: str):
     )
 
 
-@app.get('/ping')
-def ping():
-    conn = None
-    try:
-        conn = get_connection()
-        conn.execute('SELECT 1')
-        return {'status': 'ok', 'db': 'ok'}
-    except Exception as e:
-        return {'status': 'erro', 'erro': str(e)}, 500
-    finally:
-        try:
-            if conn:
-                conn.close()
-        except Exception:
-            pass
-
-
 def _protect_page(body_fn):
     if not require_auth():
         ui.navigate.to('/')
-        return
+        return False
     if needs_password_change():
         ui.navigate.to('/trocar-senha')
-        return
+        return False
     body_fn()
+    return True
 
 
 @ui.page('/')
@@ -180,10 +164,15 @@ def page_dashboard():
     _protect_page(dashboard_page)
 
 
+PORT = int(os.environ.get('PORT', 10000))
+HOST = '0.0.0.0'
+
+print(f'🚀 INICIANDO APP EM {HOST}:{PORT}')
+
 ui.run(
     title='Maintenance APP',
-    host='0.0.0.0',
-    port=int(os.environ.get('PORT', 8081)),
+    host=HOST,
+    port=PORT,
     favicon='assets/logo_fsl.png',
     storage_secret=os.environ.get('STORAGE_SECRET', 'cmms_login_secret_2026'),
     reload=False,

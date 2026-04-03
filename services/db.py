@@ -301,53 +301,13 @@ class CompatCursor:
         return getattr(self._cursor, name)
 
 
-def _is_connection_closed_error(ex: Exception) -> bool:
-    msg = str(ex or '').strip().lower()
-    return any(token in msg for token in (
-        'connection is closed',
-        'the connection is closed',
-        'closed the connection',
-        'cannot operate on a closed database',
-        'connection already closed',
-    ))
-
-
 class CompatConnection:
-    def __init__(self, backend: str, raw_conn, raw_factory=None):
+    def __init__(self, backend: str, raw_conn):
         self.backend = backend
         self._conn = raw_conn
-        self._raw_factory = raw_factory
-
-    def _reconnect(self):
-        if not self._raw_factory:
-            raise RuntimeError('Factory de conexão não configurada.')
-        try:
-            if self._conn is not None:
-                self._conn.close()
-        except Exception:
-            pass
-        self._conn = self._raw_factory()
-        return self._conn
-
-    def _ensure_open(self):
-        if self._conn is None:
-            self._reconnect()
-            return
-        try:
-            if getattr(self._conn, 'closed', False):
-                self._reconnect()
-        except Exception:
-            pass
 
     def cursor(self):
-        self._ensure_open()
-        try:
-            return CompatCursor(self._conn.cursor(), self.backend)
-        except Exception as ex:
-            if _is_connection_closed_error(ex):
-                self._reconnect()
-                return CompatCursor(self._conn.cursor(), self.backend)
-            raise
+        return CompatCursor(self._conn.cursor(), self.backend)
 
     def execute(self, query, params=None):
         cur = self.cursor()
@@ -355,61 +315,32 @@ class CompatConnection:
         return cur
 
     def commit(self):
-        self._ensure_open()
-        try:
-            self._conn.commit()
-        except Exception as ex:
-            if _is_connection_closed_error(ex):
-                self._reconnect()
-                self._conn.commit()
-                return
-            raise
+        self._conn.commit()
 
     def rollback(self):
-        try:
-            self._ensure_open()
-            self._conn.rollback()
-        except Exception:
-            pass
+        self._conn.rollback()
 
     def close(self):
-        try:
-            if self._conn is not None:
-                self._conn.close()
-        finally:
-            self._conn = None
+        self._conn.close()
 
 
-def _make_raw_connection():
-    if DB_MODE == 'sqlite':
-        raw_conn = sqlite3.connect(SQLITE_PATH, check_same_thread=False)
-        raw_conn.row_factory = sqlite3.Row
-        raw_conn.execute('PRAGMA foreign_keys = ON')
-        return raw_conn
-
-    if DB_MODE in {'postgres', 'postgresql'}:
-        if not DATABASE_URL:
-            raise RuntimeError('DATABASE_URL não informado para DB_MODE=postgres.')
-        try:
-            import psycopg
-            from psycopg.rows import dict_row
-        except Exception as ex:
-            raise RuntimeError('Instale psycopg[binary] para usar Supabase/Postgres.') from ex
-        return psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False)
-
+if DB_MODE == 'sqlite':
+    raw_conn = sqlite3.connect(SQLITE_PATH, check_same_thread=False)
+    raw_conn.row_factory = sqlite3.Row
+    raw_conn.execute('PRAGMA foreign_keys = ON')
+    conn = CompatConnection('sqlite', raw_conn)
+elif DB_MODE in {'postgres', 'postgresql'}:
+    if not DATABASE_URL:
+        raise RuntimeError('DATABASE_URL não informado para DB_MODE=postgres.')
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+    except Exception as ex:
+        raise RuntimeError('Instale psycopg[binary] para usar Supabase/Postgres.') from ex
+    raw_conn = psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False)
+    conn = CompatConnection('postgres', raw_conn)
+else:
     raise RuntimeError(f'DB_MODE inválido: {DB_MODE}')
-
-
-def _create_connection() -> CompatConnection:
-    backend = 'sqlite' if DB_MODE == 'sqlite' else 'postgres'
-    return CompatConnection(backend, _make_raw_connection(), raw_factory=_make_raw_connection)
-
-
-conn = _create_connection()
-
-
-def get_connection():
-    return _create_connection()
 
 
 
