@@ -1,10 +1,7 @@
-from __future__ import annotations
-
-import json
-
 from nicegui import ui, app
 
 SIDEBAR_OPEN_KEY = 'sidebar_open'
+LOADER_BOOT_KEY = '_page_loader_bootstrapped'
 
 
 def _sidebar_aberta() -> bool:
@@ -20,142 +17,105 @@ def _is_read_only() -> bool:
     return role == 'VISUALIZACAO'
 
 
-def ensure_page_loader() -> None:
-    ui.add_head_html(
-        """
-        <style>
-          #fsl-page-loader {
-            position: fixed;
-            inset: 0;
-            z-index: 99999;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: rgba(241,245,249,.62);
-            backdrop-filter: blur(2px);
-            opacity: 0;
-            visibility: hidden;
-            pointer-events: none;
-            transition: opacity .12s ease, visibility .12s ease;
-          }
-          #fsl-page-loader.visible {
-            opacity: 1;
-            visibility: visible;
-            pointer-events: all;
-          }
-          #fsl-page-loader-card {
-            min-width: 220px;
-            max-width: 340px;
-            background: rgba(255,255,255,.98);
-            border: 1px solid rgba(148,163,184,.24);
-            border-radius: 20px;
-            box-shadow: 0 18px 50px rgba(15,23,42,.18);
-            padding: 24px 28px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 12px;
-          }
-          #fsl-page-loader-spinner {
-            width: 54px;
-            height: 54px;
-            border-radius: 9999px;
-            border: 5px solid rgba(148,163,184,.35);
-            border-top-color: #f59e0b;
-            animation: fslSpin .8s linear infinite;
-          }
-          #fsl-page-loader-text {
-            font: 700 13px/1.2 Arial, sans-serif;
-            color: #334155;
-            text-transform: uppercase;
-            letter-spacing: .04em;
-            text-align: center;
-          }
-          body.fsl-busy, body.fsl-busy * {
-            cursor: progress !important;
-          }
-          @keyframes fslSpin {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
-          }
-        </style>
-        <script>
-          window.fslEnsurePageLoader = function() {
-            let wrap = document.getElementById('fsl-page-loader');
-            if (wrap) return wrap;
+def ensure_page_loader():
+    if app.storage.user.get(LOADER_BOOT_KEY):
+        return
 
-            wrap = document.createElement('div');
-            wrap.id = 'fsl-page-loader';
-            wrap.innerHTML = `
-              <div id="fsl-page-loader-card">
-                <div id="fsl-page-loader-spinner"></div>
-                <div id="fsl-page-loader-text">CARREGANDO...</div>
-              </div>`;
-            document.body.appendChild(wrap);
-            return wrap;
-          };
+    ui.add_head_html("""
+    <style>
+      #fsl-page-loader {
+        position: fixed; inset: 0; z-index: 99999;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(241,245,249,.62); backdrop-filter: blur(2px);
+        opacity: 0; visibility: hidden; pointer-events: none;
+        transition: opacity .12s ease, visibility .12s ease;
+      }
+      #fsl-page-loader.visible {
+        opacity: 1; visibility: visible; pointer-events: all;
+      }
+      #fsl-page-loader-card {
+        min-width: 200px; max-width: 320px;
+        background: rgba(255,255,255,.98);
+        border: 1px solid rgba(148,163,184,.24);
+        border-radius: 20px;
+        box-shadow: 0 18px 50px rgba(15,23,42,.18);
+        padding: 24px 28px;
+        display:flex; flex-direction:column; align-items:center; gap:12px;
+      }
+      #fsl-page-loader-spinner {
+        width: 54px; height: 54px; border-radius: 9999px;
+        border: 5px solid rgba(148,163,184,.35);
+        border-top-color: #f59e0b;
+        animation: fslSpin .8s linear infinite;
+      }
+      #fsl-page-loader-text {
+        font: 700 13px/1.2 Arial, sans-serif; color: #334155;
+        text-transform: uppercase; letter-spacing: .04em; text-align:center;
+      }
+      body.fsl-busy, body.fsl-busy * { cursor: progress !important; }
+      @keyframes fslSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    </style>
+    <script>
+      window.fslEnsurePageLoader = function() {
+        if (document.getElementById('fsl-page-loader')) return;
+        const wrap = document.createElement('div');
+        wrap.id = 'fsl-page-loader';
+        wrap.className = 'visible';
+        wrap.innerHTML = `
+          <div id="fsl-page-loader-card">
+            <div id="fsl-page-loader-spinner"></div>
+            <div id="fsl-page-loader-text">CARREGANDO...</div>
+          </div>`;
+        document.body.appendChild(wrap);
+      };
+      window.fslShowPageLoader = function(texto) {
+        window.fslEnsurePageLoader();
+        const el = document.getElementById('fsl-page-loader');
+        const tx = document.getElementById('fsl-page-loader-text');
+        if (tx) tx.textContent = (texto || 'CARREGANDO...').toUpperCase();
+        if (el) {
+          el.classList.add('visible');
+          document.body.classList.add('fsl-busy');
+        }
+      };
+      window.fslHidePageLoader = function() {
+        const el = document.getElementById('fsl-page-loader');
+        if (el) el.classList.remove('visible');
+        document.body.classList.remove('fsl-busy');
+      };
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', window.fslEnsurePageLoader, {once: true});
+      } else {
+        window.fslEnsurePageLoader();
+      }
+    </script>
+    """)
 
-          window.fslShowPageLoader = function(texto) {
-            const el = window.fslEnsurePageLoader();
-            const tx = document.getElementById('fsl-page-loader-text');
-            if (tx) tx.textContent = String(texto || 'CARREGANDO...').toUpperCase();
-            if (el) {
-              el.classList.add('visible');
-              document.body.classList.add('fsl-busy');
-            }
-          };
+    app.storage.user[LOADER_BOOT_KEY] = True
 
-          window.fslHidePageLoader = function() {
-            const el = document.getElementById('fsl-page-loader');
-            if (el) el.classList.remove('visible');
-            document.body.classList.remove('fsl-busy');
-          };
-
-          if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', function() {
-              window.fslEnsurePageLoader();
-              window.fslHidePageLoader();
-            }, {once: true});
-          } else {
-            window.fslEnsurePageLoader();
-            window.fslHidePageLoader();
-          }
-
-          window.addEventListener('load', function() {
-            if (window.fslHidePageLoader) window.fslHidePageLoader();
-          });
-
-          window.addEventListener('pageshow', function() {
-            if (window.fslHidePageLoader) window.fslHidePageLoader();
-          });
-        </script>
-        """
-    )
-
-
-def show_page_loader(texto: str = 'CARREGANDO...') -> None:
+def show_page_loader(texto: str = 'CARREGANDO...'):
     ensure_page_loader()
     try:
-        texto_js = json.dumps(str(texto or 'CARREGANDO...'))
-        ui.run_javascript(f'window.fslShowPageLoader({texto_js});')
+        import json
+        ui.run_javascript(f"window.fslShowPageLoader({json.dumps(str(texto or 'CARREGANDO...'))});")
     except Exception:
         pass
 
 
-def hide_page_loader() -> None:
+def hide_page_loader():
     try:
-        ui.run_javascript('window.fslHidePageLoader();')
+        ui.run_javascript("window.fslHidePageLoader();")
     except Exception:
         pass
 
 
 def loader_props(texto: str = 'CARREGANDO...') -> str:
-    texto_js = json.dumps(str(texto or 'CARREGANDO...'))
+    texto_js = str(texto or 'CARREGANDO...').replace('\\', '\\\\').replace("'", "\\'")
     return (
-        f'onclick="window.fslShowPageLoader({texto_js})" '
-        f'ontouchstart="window.fslShowPageLoader({texto_js})"'
+        f'onmousedown="window.fslShowPageLoader(\'{texto_js}\')" ' 
+        f'ontouchstart="window.fslShowPageLoader(\'{texto_js}\')" ' 
+        f'onclick="window.fslShowPageLoader(\'{texto_js}\')"'
     )
-
 
 def build_menu(current_route: str | None = None):
     ensure_page_loader()
@@ -178,23 +138,22 @@ def build_menu(current_route: str | None = None):
         'h-full bg-slate-800 text-white p-3 gap-2 shrink-0 shadow-lg transition-all duration-300'
     )
 
-    def ir_para(rota: str | None, titulo: str) -> None:
+    def ir_para(rota, titulo):
         if rota:
             show_page_loader(f'ABRINDO {titulo}...')
-            ui.navigate.to(rota)
+            ui.timer(0.05, lambda: ui.navigate.to(rota), once=True)
         else:
             ui.notify(f'{titulo} em breve', type='warning')
 
-    def logout() -> None:
+    def logout():
         from auth import logout as auth_logout
-        show_page_loader('SAINDO...')
         auth_logout()
 
-    def toggle_sidebar() -> None:
+    def toggle_sidebar():
         _set_sidebar_aberta(not _sidebar_aberta())
         render_menu()
 
-    def estilo_largura() -> str:
+    def estilo_largura():
         largura = '260px' if _sidebar_aberta() else '70px'
         return f'width: {largura}; border-right: 1px solid rgba(255,255,255,0.08);'
 
@@ -207,7 +166,7 @@ def build_menu(current_route: str | None = None):
     def classes_botao_logout() -> str:
         return 'w-full justify-start rounded-xl px-3 py-3 hover:bg-red-500/20 text-red-300'
 
-    def render_menu() -> None:
+    def render_menu():
         sidebar.style(estilo_largura())
         sidebar.clear()
         aberta = _sidebar_aberta()
@@ -234,13 +193,11 @@ def build_menu(current_route: str | None = None):
                         if aberta:
                             ui.label(titulo).classes('ml-3 text-sm truncate')
 
-            ui.separator().classes('bg-white/10 my-2')
-
+            ui.separator().classes('my-2 bg-white/10')
             with ui.button(on_click=logout).props('flat no-caps align=left').classes(classes_botao_logout()):
                 with ui.row().classes('items-center w-full no-wrap'):
-                    ui.icon('logout').classes('text-[20px] shrink-0')
+                    ui.icon('logout').classes('text-[20px]')
                     if aberta:
-                        ui.label('Sair').classes('ml-3 text-sm truncate')
+                        ui.label('Logout').classes('ml-3 text-sm')
 
     render_menu()
-    return sidebar

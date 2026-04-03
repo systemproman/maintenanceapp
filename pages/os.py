@@ -421,7 +421,6 @@ def _gerar_pdf_os(item: dict, totais: dict, atividades: list, materiais: list, a
 
 
 def os_page():
-    show_page_loader('CARREGANDO PÁGINA...')
     editavel = can_edit()
     estado = {'os_id': app.storage.user.get('os_selected_id')}
     lista_cache = []
@@ -473,9 +472,9 @@ def os_page():
         if os_id_atual:
             detalhe_cache.pop(str(os_id_atual), None)
         def _job():
-            render_detalhe(force=True)
             if reload_list:
                 carregar_lista(force=True)
+            render_detalhe(force=True)
         _run_busy(_job, texto)
 
     def box(titulo, valor):
@@ -534,12 +533,6 @@ def os_page():
                 ui.spinner(size='lg').classes('text-amber-500 mt-2')
         show_page_loader('ABRINDO OS...')
         ui.timer(0.03, lambda: _abrir_detalhe_async(os_id), once=True)
-
-    def _abrir_detalhe_async(os_id):
-        try:
-            render_detalhe(force=False)
-        finally:
-            hide_page_loader()
 
     def render_detalhe(force: bool = False):
         detalhe.clear()
