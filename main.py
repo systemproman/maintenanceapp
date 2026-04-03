@@ -16,15 +16,18 @@ from pages.equipes import equipes_page
 from pages.funcionarios import funcionarios_page
 from pages.usuarios import usuarios_page
 from pages.dashboard import dashboard_page
-from services.db import get_anexo
+from services.db import get_anexo, get_connection
 
 
+# 🔹 cria pastas necessárias
 Path('assets').mkdir(parents=True, exist_ok=True)
 Path('uploads').mkdir(parents=True, exist_ok=True)
+
 app.add_static_files('/assets', 'assets')
 app.add_static_files('/uploads', 'uploads')
 
 
+# 🔹 resolver anexos
 def _resolver_anexo(anexo_id: str):
     anexo = get_anexo(anexo_id)
     if not anexo:
@@ -37,43 +40,9 @@ def _resolver_anexo(anexo_id: str):
     return anexo, caminho
 
 
+# 🔹 abrir arquivo inline
 @app.get('/arquivo/{anexo_id}/{nome}')
 def abrir_arquivo(anexo_id: str, nome: str):
-    anexo, caminho = _resolver_anexo(anexo_id)
-
-    filename = str(
-        anexo.get('nome_original')
-        or anexo.get('nome_salvo')
-        or unquote(nome)
-        or caminho.name
-    )
-
-    media_type, _ = mimetypes.guess_type(str(caminho))
-    if not media_type:
-        ext = caminho.suffix.lower()
-        if ext in ['.jpg', '.jpeg']:
-            media_type = 'image/jpeg'
-        elif ext == '.png':
-            media_type = 'image/png'
-        elif ext == '.webp':
-            media_type = 'image/webp'
-        elif ext == '.gif':
-            media_type = 'image/gif'
-        elif ext == '.pdf':
-            media_type = 'application/pdf'
-        else:
-            media_type = 'application/octet-stream'
-
-    return FileResponse(
-        path=str(caminho),
-        filename=filename,
-        media_type=media_type,
-        headers={"Content-Disposition": f'inline; filename="{filename}"'}
-    )
-
-
-@app.get('/download/{anexo_id}/{nome}')
-def baixar_arquivo(anexo_id: str, nome: str):
     anexo, caminho = _resolver_anexo(anexo_id)
 
     filename = str(
@@ -91,21 +60,63 @@ def baixar_arquivo(anexo_id: str, nome: str):
         path=str(caminho),
         filename=filename,
         media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'}
+    )
+
+
+# 🔹 download arquivo
+@app.get('/download/{anexo_id}/{nome}')
+def baixar_arquivo(anexo_id: str, nome: str):
+    anexo, caminho = _resolver_anexo(anexo_id)
+
+    filename = str(
+        anexo.get('nome_original')
+        or anexo.get('nome_salvo')
+        or unquote(nome)
+        or caminho.name
+    )
+
+    return FileResponse(
+        path=str(caminho),
+        filename=filename,
+        media_type='application/octet-stream',
         content_disposition_type='attachment',
     )
 
 
+# 🔹 endpoint de saúde
+@app.get('/ping')
+def ping():
+    conn = None
+    try:
+        conn = get_connection()
+        conn.execute('SELECT 1')
+        return {'status': 'ok', 'db': 'ok'}
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={'status': 'erro', 'erro': str(e)},
+        )
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
+
+# 🔹 proteção de páginas
 def _protect_page(body_fn):
     if not require_auth():
         ui.navigate.to('/')
-        return False
+        return
     if needs_password_change():
         ui.navigate.to('/trocar-senha')
-        return False
+        return
     body_fn()
-    return True
 
 
+# 🔹 rotas
 @ui.page('/')
 def login_page():
     build_login_page()
@@ -164,7 +175,8 @@ def page_dashboard():
     _protect_page(dashboard_page)
 
 
-PORT = int(os.environ.get('PORT', 10000))
+# 🔥 CONFIGURAÇÃO FINAL (ESSENCIAL PRO RENDER)
+PORT = int(os.environ['PORT'])
 HOST = '0.0.0.0'
 
 print(f'🚀 INICIANDO APP EM {HOST}:{PORT}')
@@ -177,4 +189,5 @@ ui.run(
     storage_secret=os.environ.get('STORAGE_SECRET', 'cmms_login_secret_2026'),
     reload=False,
     language='pt-BR',
+    show=False,
 )
