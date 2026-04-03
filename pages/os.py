@@ -1,6 +1,5 @@
 
 import tempfile
-import time
 from datetime import datetime, date
 from pathlib import Path
 from urllib.parse import quote
@@ -424,8 +423,6 @@ def _gerar_pdf_os(item: dict, totais: dict, atividades: list, materiais: list, a
 def os_page():
     editavel = can_edit()
     estado = {'os_id': app.storage.user.get('os_selected_id')}
-    lista_cache = []
-    detalhe_cache = {}
 
     with ui.row().classes('w-full h-screen no-wrap bg-slate-100'):
         build_menu('/os')
@@ -469,12 +466,13 @@ def os_page():
             _set_loading(False)
 
     def refresh_current_os(reload_list: bool = False, texto: str = 'CARREGANDO...'):
-        os_id_atual = _get_os_id()
-        if os_id_atual:
-            detalhe_cache.pop(str(os_id_atual), None)
-            app.storage.user['os_selected_id'] = os_id_atual
-        show_page_loader(texto)
-        ui.navigate.to(f"/os?reload={int(time.time() * 1000)}")
+        def _job():
+            if reload_list:
+                carregar_lista(force=True)
+            else:
+                render_lista()
+            render_detalhe(force=True)
+        _run_busy(_job, texto)
 
     def box(titulo, valor):
         with ui.card().classes('shadow-none bg-slate-50 border border-slate-200 p-3'):
@@ -487,10 +485,7 @@ def os_page():
             ui.label(str(valor or '-')).classes('text-sm text-slate-800').style('white-space: pre-wrap;')
 
     def render_lista(dados=None):
-        nonlocal lista_cache
-        if dados is not None:
-            lista_cache = list(dados)
-        dados_render = lista_cache
+        dados_render = list(dados) if dados is not None else db.listar_os(str(busca.value or '').strip())
         lista.clear()
         with lista:
             if not dados_render:
@@ -512,26 +507,19 @@ def os_page():
 
     def carregar_lista(force: bool = False):
         termo_busca = str(busca.value or '').strip()
-        if force or not lista_cache or termo_busca:
-            dados = db.listar_os(termo_busca)
-            render_lista(dados)
-        else:
-            render_lista()
+        dados = db.listar_os(termo_busca)
         atual = _get_os_id()
-        ids = {str(item.get('id')) for item in lista_cache}
-        if lista_cache and (not atual or str(atual) not in ids):
-            _set_os_id(lista_cache[0].get('id'))
+        ids = {str(item.get('id')) for item in dados}
+        if dados and (not atual or str(atual) not in ids):
+            _set_os_id(dados[0].get('id'))
+        elif not dados:
+            _set_os_id(None)
+        render_lista(dados)
 
     def selecionar_os(os_id):
         _set_os_id(os_id)
         render_lista()
-        detalhe.clear()
-        with detalhe:
-            with ui.card().classes('w-full rounded-xl shadow-none bg-slate-50 border border-slate-200 p-6'):
-                ui.label('CARREGANDO OS...').classes('text-lg font-bold text-slate-700')
-                ui.spinner(size='lg').classes('text-amber-500 mt-2')
-        show_page_loader('ABRINDO OS...')
-        ui.timer(0.03, lambda: _abrir_detalhe_async(os_id), once=True)
+        render_detalhe(force=True)
 
     def render_detalhe(force: bool = False):
         detalhe.clear()
@@ -541,24 +529,26 @@ def os_page():
                 with ui.card().classes('w-full rounded-xl shadow-none bg-slate-50 border border-slate-200 p-6'):
                     ui.label('SELECIONE UMA OS').classes('text-lg font-bold text-slate-700')
             return
-        cache_key = str(os_id)
-        detalhe_os = None if force else detalhe_cache.get(cache_key)
+
+        detalhe_os = db.get_os_detalhe(os_id) if hasattr(db, 'get_os_detalhe') else None
         if detalhe_os is None:
-            detalhe_os = db.get_os_detalhe(os_id) if hasattr(db, 'get_os_detalhe') else None
-            if detalhe_os is None:
-                item = db.get_os(os_id)
-                if not item:
-                    _set_os_id(None)
-                    return render_detalhe(force=True)
-                detalhe_os = {
-                    'item': item,
-                    'totais': db.calcular_totais_os(os_id),
-                    'atividades': db.listar_os_atividades(os_id),
-                    'materiais': db.listar_os_materiais(os_id),
-                    'apontamentos': db.listar_os_apontamentos(os_id),
-                    'anexos': db.listar_os_anexos(os_id),
-                }
-            detalhe_cache[cache_key] = detalhe_os
+            item = db.get_os(os_id)
+            if not item:
+                _set_os_id(None)
+                carregar_lista(force=True)
+                with detalhe:
+                    with ui.card().classes('w-full rounded-xl shadow-none bg-slate-50 border border-slate-200 p-6'):
+                        ui.label('SELECIONE UMA OS').classes('text-lg font-bold text-slate-700')
+                return
+            detalhe_os = {
+                'item': item,
+                'totais': db.calcular_totais_os(os_id),
+                'atividades': db.listar_os_atividades(os_id),
+                'materiais': db.listar_os_materiais(os_id),
+                'apontamentos': db.listar_os_apontamentos(os_id),
+                'anexos': db.listar_os_anexos(os_id),
+            }
+
         item = detalhe_os['item']
         totais = detalhe_os['totais']
         atividades = detalhe_os['atividades']
@@ -567,7 +557,11 @@ def os_page():
         anexos = detalhe_os['anexos']
         if not item:
             _set_os_id(None)
-            return render_detalhe()
+            carregar_lista(force=True)
+            with detalhe:
+                with ui.card().classes('w-full rounded-xl shadow-none bg-slate-50 border border-slate-200 p-6'):
+                    ui.label('SELECIONE UMA OS').classes('text-lg font-bold text-slate-700')
+            return
         tag_destaque = (item.get('componente') or item.get('equipamento') or {}).get('tag', '-')
         alvo_obj = item.get('componente') or item.get('equipamento') or {}
         alvo_desc = f"{alvo_obj.get('tag') or '-'} - {alvo_obj.get('descricao') or '-'}"
