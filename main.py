@@ -16,7 +16,7 @@ from pages.equipes import equipes_page
 from pages.funcionarios import funcionarios_page
 from pages.usuarios import usuarios_page
 from pages.dashboard import dashboard_page
-from services.db import get_anexo, conn
+from services.db import get_anexo, conn, get_connection
 
 
 # pastas
@@ -84,7 +84,8 @@ def baixar_arquivo(anexo_id: str, nome: str):
 @app.get('/ping')
 def ping():
     try:
-        cur = conn.cursor()
+        db = get_connection()
+        cur = db.cursor()
         cur.execute('SELECT 1')
         cur.fetchone()
         return {'status': 'ok', 'db': 'ok'}

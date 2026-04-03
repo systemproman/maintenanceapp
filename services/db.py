@@ -3533,8 +3533,8 @@ def atualizar_os_apontamento(
     cur = _cursor()
     if _upper(atual.get('modo_hora')) == 'ESCALA':
         cur.execute(
-            "DELETE FROM os_apontamentos WHERE os_id = ? AND atividade_id = ? AND ((funcionario_id = ?) OR (funcionario_id IS NULL AND ? IS NULL)) AND data_apontamento = ? AND modo_hora = 'ESCALA' AND descricao_servico = ? AND observacao = ?",
-            (atual['os_id'], atual['atividade_id'], atual.get('funcionario_id'), atual.get('funcionario_id'), atual.get('data_apontamento'), atual.get('descricao_servico') or '', atual.get('observacao') or ''),
+            "DELETE FROM os_apontamentos WHERE os_id = ? AND atividade_id = ? AND funcionario_id IS ? AND data_apontamento = ? AND modo_hora = 'ESCALA' AND descricao_servico = ? AND observacao = ?",
+            (atual['os_id'], atual['atividade_id'], atual.get('funcionario_id'), atual.get('data_apontamento'), atual.get('descricao_servico') or '', atual.get('observacao') or ''),
         )
     else:
         cur.execute("DELETE FROM os_apontamentos WHERE id = ?", (apontamento_id,))
@@ -3716,8 +3716,8 @@ def atualizar_os_apontamento(
     cur = _cursor()
     if _upper(atual.get('modo_hora')) == 'ESCALA':
         cur.execute(
-            "DELETE FROM os_apontamentos WHERE os_id = ? AND atividade_id = ? AND ((funcionario_id = ?) OR (funcionario_id IS NULL AND ? IS NULL)) AND data_apontamento = ? AND modo_hora = 'ESCALA' AND COALESCE(descricao_servico,'') = ? AND COALESCE(observacao,'') = ?",
-            (atual['os_id'], atual['atividade_id'], atual.get('funcionario_id'), atual.get('funcionario_id'), atual.get('data_apontamento'), atual.get('descricao_servico') or '', atual.get('observacao') or ''),
+            "DELETE FROM os_apontamentos WHERE os_id = ? AND atividade_id = ? AND funcionario_id IS ? AND data_apontamento = ? AND modo_hora = 'ESCALA' AND COALESCE(descricao_servico,'') = ? AND COALESCE(observacao,'') = ?",
+            (atual['os_id'], atual['atividade_id'], atual.get('funcionario_id'), atual.get('data_apontamento'), atual.get('descricao_servico') or '', atual.get('observacao') or ''),
         )
     else:
         cur.execute("DELETE FROM os_apontamentos WHERE id = ?", (apontamento_id,))
@@ -3947,8 +3947,8 @@ def atualizar_os_apontamento(
     cur = _cursor()
     if _upper(atual.get('modo_hora')) == 'ESCALA':
         cur.execute(
-            "DELETE FROM os_apontamentos WHERE os_id = ? AND atividade_id = ? AND ((funcionario_id = ?) OR (funcionario_id IS NULL AND ? IS NULL)) AND data_apontamento = ? AND modo_hora = 'ESCALA' AND COALESCE(descricao_servico,'') = ? AND COALESCE(observacao,'') = ?",
-            (atual['os_id'], atual['atividade_id'], atual.get('funcionario_id'), atual.get('funcionario_id'), atual.get('data_apontamento'), atual.get('descricao_servico') or '', atual.get('observacao') or ''),
+            "DELETE FROM os_apontamentos WHERE os_id = ? AND atividade_id = ? AND funcionario_id IS ? AND data_apontamento = ? AND modo_hora = 'ESCALA' AND COALESCE(descricao_servico,'') = ? AND COALESCE(observacao,'') = ?",
+            (atual['os_id'], atual['atividade_id'], atual.get('funcionario_id'), atual.get('data_apontamento'), atual.get('descricao_servico') or '', atual.get('observacao') or ''),
         )
     else:
         cur.execute("DELETE FROM os_apontamentos WHERE id = ?", (apontamento_id,))
