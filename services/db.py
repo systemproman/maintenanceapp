@@ -4918,3 +4918,7 @@ def get_os_detalhe(os_id: str):
         'anexos': anexos,
         'totais': totais,
     }
+
+
+def get_connection():
+    return conn
