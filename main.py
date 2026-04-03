@@ -16,10 +16,10 @@ from pages.equipes import equipes_page
 from pages.funcionarios import funcionarios_page
 from pages.usuarios import usuarios_page
 from pages.dashboard import dashboard_page
-from services.db import get_anexo, get_connection
+from services.db import get_anexo, conn
 
 
-# 🔹 cria pastas necessárias
+# pastas
 Path('assets').mkdir(parents=True, exist_ok=True)
 Path('uploads').mkdir(parents=True, exist_ok=True)
 
@@ -27,7 +27,6 @@ app.add_static_files('/assets', 'assets')
 app.add_static_files('/uploads', 'uploads')
 
 
-# 🔹 resolver anexos
 def _resolver_anexo(anexo_id: str):
     anexo = get_anexo(anexo_id)
     if not anexo:
@@ -40,7 +39,6 @@ def _resolver_anexo(anexo_id: str):
     return anexo, caminho
 
 
-# 🔹 abrir arquivo inline
 @app.get('/arquivo/{anexo_id}/{nome}')
 def abrir_arquivo(anexo_id: str, nome: str):
     anexo, caminho = _resolver_anexo(anexo_id)
@@ -64,7 +62,6 @@ def abrir_arquivo(anexo_id: str, nome: str):
     )
 
 
-# 🔹 download arquivo
 @app.get('/download/{anexo_id}/{nome}')
 def baixar_arquivo(anexo_id: str, nome: str):
     anexo, caminho = _resolver_anexo(anexo_id)
@@ -84,28 +81,20 @@ def baixar_arquivo(anexo_id: str, nome: str):
     )
 
 
-# 🔹 endpoint de saúde
 @app.get('/ping')
 def ping():
-    conn = None
     try:
-        conn = get_connection()
-        conn.execute('SELECT 1')
+        cur = conn.cursor()
+        cur.execute('SELECT 1')
+        cur.fetchone()
         return {'status': 'ok', 'db': 'ok'}
     except Exception as e:
         return JSONResponse(
             status_code=500,
             content={'status': 'erro', 'erro': str(e)},
         )
-    finally:
-        try:
-            if conn:
-                conn.close()
-        except Exception:
-            pass
 
 
-# 🔹 proteção de páginas
 def _protect_page(body_fn):
     if not require_auth():
         ui.navigate.to('/')
@@ -116,7 +105,6 @@ def _protect_page(body_fn):
     body_fn()
 
 
-# 🔹 rotas
 @ui.page('/')
 def login_page():
     build_login_page()
@@ -175,7 +163,7 @@ def page_dashboard():
     _protect_page(dashboard_page)
 
 
-# 🔥 CONFIGURAÇÃO FINAL (ESSENCIAL PRO RENDER)
+# 🔥 CONFIG RENDER
 PORT = int(os.environ['PORT'])
 HOST = '0.0.0.0'
 
