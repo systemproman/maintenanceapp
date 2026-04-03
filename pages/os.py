@@ -1,5 +1,6 @@
 
 import tempfile
+import time
 from datetime import datetime, date
 from pathlib import Path
 from urllib.parse import quote
@@ -471,11 +472,9 @@ def os_page():
         os_id_atual = _get_os_id()
         if os_id_atual:
             detalhe_cache.pop(str(os_id_atual), None)
-        def _job():
-            if reload_list:
-                carregar_lista(force=True)
-            render_detalhe(force=True)
-        _run_busy(_job, texto)
+            app.storage.user['os_selected_id'] = os_id_atual
+        show_page_loader(texto)
+        ui.navigate.to(f"/os?reload={int(time.time() * 1000)}")
 
     def box(titulo, valor):
         with ui.card().classes('shadow-none bg-slate-50 border border-slate-200 p-3'):
