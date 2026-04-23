@@ -1,12 +1,10 @@
-
 from nicegui import app
 
 def get_user():
     return app.storage.user.get('user', {})
 
 def get_role():
-    user = get_user()
-    return (user.get('nivel_acesso') or 'VISUALIZACAO').upper()
+    return str(app.storage.user.get('role') or 'VISUALIZACAO').upper()
 
 def is_read_only():
-    return get_role() != 'COMPLETO'
+    return get_role() == 'VISUALIZACAO'

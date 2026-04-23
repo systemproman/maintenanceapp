@@ -8,6 +8,7 @@ from openpyxl import Workbook
 
 from components.menu import build_menu, show_page_loader, hide_page_loader, loader_props
 from config.settings import ENABLE_CRITICIDADE
+from auth import can_access_route, can_create, can_edit, can_delete, can_export
 from services.db import (
     get_ativos,
     get_ativo,
@@ -189,6 +190,14 @@ def _copiar_pecas_lista(linhas):
 
 
 def equipamentos_page():
+    if not can_access_route('/equipamentos'):
+        ui.notify('Você não possui permissão para acessar esta tela.', type='negative')
+        ui.navigate.to('/home')
+        return
+    pode_criar = can_create('/equipamentos')
+    editavel = can_edit('/equipamentos')
+    pode_excluir = can_delete('/equipamentos')
+    pode_exportar = can_export('/equipamentos')
     ui.add_head_html(BUSCA_NEUTRA_CSS)
     with ui.row().classes('w-full h-screen no-wrap bg-slate-100'):
         build_menu('/equipamentos')

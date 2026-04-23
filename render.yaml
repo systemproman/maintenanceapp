@@ -1,0 +1,51 @@
+services:
+  - type: web
+    name: maintenance-app
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: DB_MODE
+        value: postgres
+      - key: DATABASE_URL
+        sync: false          # Preencher no painel do Render
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: SUPABASE_BUCKET_ASSETS
+        value: assets
+      - key: SUPABASE_BUCKET_UPLOADS
+        value: uploads
+      - key: SUPABASE_ASSETS_ENABLED
+        value: "true"
+      - key: SUPABASE_UPLOADS_ENABLED
+        value: "true"
+      - key: SUPABASE_STORAGE_FOLDER_ATIVOS
+        value: ativos
+      - key: SUPABASE_STORAGE_FOLDER_OS
+        value: os
+      - key: STORAGE_SECRET
+        sync: false          # Preencher no painel do Render
+      - key: ENABLE_CRITICIDADE
+        value: "true"
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USE_TLS
+        value: "true"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM_EMAIL
+        sync: false
+      - key: SMTP_FROM_NAME
+        value: Maintenance APP
+      - key: APP_BASE_URL
+        sync: false          # Ex: https://seu-app.onrender.com
+      - key: PORT
+        value: "8080"

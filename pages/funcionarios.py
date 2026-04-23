@@ -1,7 +1,7 @@
 
 from nicegui import ui
 from components.menu import build_menu, show_page_loader, hide_page_loader
-from auth import can_edit
+from auth import can_edit, can_create, can_delete, can_access_route
 from services import db
 
 def _fmt_brl(valor):
@@ -12,14 +12,20 @@ def _fmt_brl(valor):
 
 
 def funcionarios_page():
-    editavel = can_edit()
+    if not can_access_route('/funcionarios'):
+        ui.notify('Você não possui permissão para acessar esta tela.', type='negative')
+        ui.navigate.to('/home')
+        return
+    editavel = can_edit('/funcionarios')
+    pode_criar = can_create('/funcionarios')
+    pode_excluir = can_delete('/funcionarios')
     with ui.row().classes('w-full h-screen no-wrap bg-slate-100'):
         build_menu('/funcionarios')
         with ui.column().classes('flex-1 h-full p-4 gap-4 overflow-hidden'):
             with ui.card().classes('w-full rounded-2xl shadow-sm border-0 bg-white p-4'):
                 with ui.row().classes('w-full items-center justify-between'):
                     ui.label('FUNCIONÁRIOS').classes('text-xl font-bold text-slate-800')
-                    if editavel:
+                    if pode_criar:
                         ui.button('NOVO FUNCIONÁRIO', icon='add', on_click=lambda: form_funcionario()).props('unelevated').classes('bg-amber-500 text-black font-bold')
             area = ui.column().classes('w-full gap-3 overflow-auto')
 
@@ -36,7 +42,7 @@ def funcionarios_page():
                         if editavel:
                             with ui.row().classes('gap-1'):
                                 ui.button(icon='edit', on_click=lambda e=None, item=f: form_funcionario(item)).props('flat round dense')
-                                ui.button(icon='delete', on_click=lambda e=None, item=f: excluir_funcionario(item)).props('flat round dense color=negative')
+                                ui.button(icon='delete', on_click=lambda e=None, item=f: excluir_funcionario(item)).props('flat round dense color=negative') if pode_excluir else None
 
     def form_funcionario(item=None):
         equipes = {e['id']: e['nome'] for e in db.listar_equipes()}

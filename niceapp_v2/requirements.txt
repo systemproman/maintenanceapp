@@ -1,0 +1,8 @@
+nicegui
+psycopg[binary]
+python-dotenv
+reportlab
+requests
+fastapi
+uvicorn
+openpyxl

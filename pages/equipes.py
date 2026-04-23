@@ -1,5 +1,5 @@
 from nicegui import ui
-from auth import can_edit
+from auth import can_edit, can_access_route
 from components.menu import build_menu, show_page_loader, hide_page_loader
 from services import db
 
@@ -17,7 +17,11 @@ def _normalize_hhmm(valor: str) -> str:
 
 
 def equipes_page():
-    editavel = can_edit()
+    if not can_access_route('/equipes'):
+        ui.notify('Você não possui permissão para acessar esta tela.', type='negative')
+        ui.navigate.to('/home')
+        return
+    editavel = can_edit('/equipes')
     with ui.row().classes('w-full h-screen no-wrap bg-slate-100'):
         build_menu('/equipes')
         with ui.column().classes('flex-1 h-full p-4 gap-4 overflow-hidden'):

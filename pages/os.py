@@ -12,7 +12,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
-from auth import can_edit
+from auth import can_edit, can_close_os, can_delete, can_access_route, can_create, can_export
 from components.menu import build_menu, show_page_loader, hide_page_loader
 from services import db
 
@@ -421,7 +421,15 @@ def _gerar_pdf_os(item: dict, totais: dict, atividades: list, materiais: list, a
 
 
 def os_page():
-    editavel = can_edit()
+    if not can_access_route('/os'):
+        ui.notify('Você não possui permissão para acessar esta tela.', type='negative')
+        ui.navigate.to('/home')
+        return
+    editavel = can_edit('/os')
+    pode_criar = can_create('/os')
+    pode_encerrar = can_close_os()
+    pode_excluir = can_delete('/os')
+    pode_exportar = can_export('/os')
     estado = {'os_id': app.storage.user.get('os_selected_id')}
 
     with ui.row().classes('w-full h-screen no-wrap bg-slate-100'):
@@ -435,7 +443,7 @@ def os_page():
                     with ui.row().classes('items-center gap-2'):
                         busca = ui.input(placeholder='BUSCAR NÚMERO, TAG, DESCRIÇÃO...').props('outlined dense clearable').classes('w-[420px]')
                         ui.button(icon='search', on_click=lambda: _run_busy(carregar_lista, 'CARREGANDO OS...')).props('flat round dense')
-                        if editavel:
+                        if pode_criar:
                             ui.button('NOVA OS', icon='add', on_click=lambda: abrir_form_os()).props('unelevated').classes('bg-amber-500 text-black font-bold')
                         ui.button(icon='refresh', on_click=lambda: _run_busy(carregar_lista, 'ATUALIZANDO OS...')).props('flat round dense')
             with ui.row().classes('w-full flex-1 gap-4 overflow-hidden'):
@@ -568,6 +576,8 @@ def os_page():
         os_bloqueada = str(item.get('status') or '').upper() == 'ENCERRADA'
         editavel_os = bool(editavel and not os_bloqueada)
         pode_editar_os = bool(editavel)
+        pode_encerrar_os = bool(pode_encerrar and not os_bloqueada)  # só Admin
+        pode_excluir_os = bool(pode_excluir and not os_bloqueada)    # só Admin
         with detalhe:
             with ui.card().classes('w-full rounded-xl shadow-none border border-slate-200 p-4 gap-3'):
                 with ui.row().classes('w-full items-start justify-between'):
@@ -576,8 +586,11 @@ def os_page():
                         ui.label(item['numero']).classes('text-sm font-bold text-slate-500')
                         ui.label(alvo_desc).classes('text-sm text-slate-500')
                     with ui.row().classes('items-center gap-1'):
-                        if editavel_os:
-                            status_os = ui.select(STATUS_OS, value=item.get('status') or 'ABERTA').props('dense outlined options-dense').classes('min-w-[180px]')
+                        if editavel_os or pode_encerrar_os:
+                            # Status options: técnico não aparece aqui (editavel_os=False)
+                            # Gerência vê opções mas sem ENCERRADA; Admin vê todas
+                            _opts = STATUS_OS if pode_encerrar_os else [s for s in STATUS_OS if s != 'ENCERRADA']
+                            status_os = ui.select(_opts, value=item.get('status') or 'ABERTA').props('dense outlined options-dense').classes('min-w-[180px]')
 
                             def _persistir_status_os(novo_status, data_encerramento=None, os_item=item, ctrl=status_os):
                                 try:
@@ -664,7 +677,7 @@ def os_page():
                             ui.label(item.get('status') or '-').classes(f'text-[11px] px-2 py-1 rounded-full font-bold {_status_badge_classes(item.get("status"))}')
                         if pode_editar_os:
                             ui.button(icon='edit', on_click=lambda: abrir_form_os(item)).props('flat round dense')
-                        if editavel_os:
+                        if pode_excluir_os:
                             ui.button(icon='delete', on_click=lambda: confirmar_excluir_os(item)).props('flat round dense color=negative')
                 with ui.row().classes('w-full items-center justify-end gap-2'):
                     def abrir_dialog_pdf():

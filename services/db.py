@@ -253,6 +253,25 @@ class CompatCursor:
         sql = sql.replace('?', '%s')
         return sql
 
+    def _is_connection_error(self, exc: Exception) -> bool:
+        erro_txt = str(exc).lower()
+        nome_erro = exc.__class__.__name__.lower()
+        chaves_texto = [
+            'connection',
+            'server closed the connection',
+            'terminating connection',
+            'could not connect',
+            'connection refused',
+            'broken pipe',
+            'timeout expired',
+            'connection timed out',
+            'ssl connection has been closed unexpectedly',
+            'consuming input failed',
+            'sending query failed',
+        ]
+        chaves_nome = ['operationalerror', 'interfaceerror']
+        return any(chave in erro_txt for chave in chaves_texto) or any(chave in nome_erro for chave in chaves_nome)
+
     def execute(self, query, params=None):
         sql = self._translate(query)
         tried_reconnect = False
@@ -263,13 +282,13 @@ class CompatCursor:
                 else:
                     self._cursor.execute(sql, params)
                 break
-            except Exception:
+            except Exception as e:
                 if self._backend == 'postgres':
                     try:
                         self._cursor.connection.rollback()
                     except Exception:
                         pass
-                    if self._owner is not None and not tried_reconnect:
+                    if self._owner is not None and not tried_reconnect and self._is_connection_error(e):
                         tried_reconnect = True
                         self._owner._reconnect()
                         self._cursor = self._owner._conn.cursor()
@@ -285,13 +304,13 @@ class CompatCursor:
             try:
                 self._cursor.executemany(sql, seq_of_params)
                 break
-            except Exception:
+            except Exception as e:
                 if self._backend == 'postgres':
                     try:
                         self._cursor.connection.rollback()
                     except Exception:
                         pass
-                    if self._owner is not None and not tried_reconnect:
+                    if self._owner is not None and not tried_reconnect and self._is_connection_error(e):
                         tried_reconnect = True
                         self._owner._reconnect()
                         self._cursor = self._owner._conn.cursor()
@@ -389,7 +408,7 @@ def _new_postgres_connection():
         from psycopg.rows import dict_row
     except Exception as ex:
         raise RuntimeError('Instale psycopg[binary] para usar Supabase/Postgres.') from ex
-    return psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False)
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False, connect_timeout=5)
 
 
 if DB_MODE == 'sqlite':
@@ -1920,7 +1939,7 @@ def seed_admin_user():
     usuario_id = str(uuid.uuid4())
     cur.execute("""
         INSERT INTO usuarios (id, funcionario_id, username, password, nivel_acesso, ativo, deve_trocar_senha, created_at, updated_at)
-        VALUES (?, NULL, 'admin', '1234', 'COMPLETO', 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        VALUES (?, NULL, 'admin', '1234', 'ADMIN', 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     """, (usuario_id,))
     conn.commit()
 
@@ -1935,7 +1954,8 @@ def autenticar_usuario(username: str, password: str):
         return False, 'Informe o usuário.', None
     cur = _cursor()
     cur.execute("""
-        SELECT u.*, f.nome AS nome_funcionario
+        SELECT u.*, f.nome AS nome_funcionario,
+               COALESCE(u.nome, f.nome, u.username) AS nome_exibicao
         FROM usuarios u
         LEFT JOIN funcionarios f ON f.id = u.funcionario_id
         WHERE lower(u.username) = ? AND u.ativo = 1
@@ -1943,20 +1963,37 @@ def autenticar_usuario(username: str, password: str):
     row = cur.fetchone()
     if not row:
         return False, 'Usuário não encontrado.', None
-    if str(row['password'] or '') != password:
+    row = dict(row)
+    password_ok = _verify_password(password, row.get('password')) if '_verify_password' in globals() else (str(row.get('password') or '') == password)
+    if not password_ok:
         return False, 'Senha incorreta.', None
-    return True, '', dict(row)
+    if '_needs_password_upgrade' in globals() and _needs_password_upgrade(row.get('password')):
+        try:
+            alterar_senha_usuario(row.get('id'), password, bool(row.get('deve_trocar_senha', 0)))
+            cur.execute("SELECT * FROM usuarios WHERE id = ?", (row.get('id'),))
+            row2 = cur.fetchone()
+            if row2:
+                row.update(dict(row2))
+        except Exception:
+            pass
+    return True, '', row
 
 
 def alterar_senha_usuario(usuario_id: str, nova_senha: str, deve_trocar: bool = False):
     if not usuario_id:
         raise ValueError('Usuário inválido.')
+    if len(str(nova_senha or '').strip()) < 4:
+        raise ValueError('A senha deve ter pelo menos 4 caracteres.')
+    valor_password = _hash_password(nova_senha) if '_hash_password' in globals() else _text(nova_senha)
     cur = _cursor()
-    cur.execute("""
+    cur.execute(
+        """
         UPDATE usuarios
         SET password = ?, deve_trocar_senha = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-    """, (_text(nova_senha), 1 if deve_trocar else 0, usuario_id))
+        """,
+        (valor_password, 1 if deve_trocar else 0, usuario_id),
+    )
     conn.commit()
 
 
@@ -2140,7 +2177,8 @@ def excluir_funcionario(funcionario_id: str):
 def listar_usuarios():
     cur = _cursor()
     cur.execute("""
-        SELECT u.*, f.nome AS nome_funcionario, e.nome AS equipe_nome
+        SELECT u.*, f.nome AS nome_funcionario, e.nome AS equipe_nome,
+               COALESCE(u.nome, f.nome, u.username) AS nome_exibicao
         FROM usuarios u
         LEFT JOIN funcionarios f ON f.id = u.funcionario_id
         LEFT JOIN equipes e ON e.id = f.equipe_id
@@ -2179,7 +2217,7 @@ def criar_usuario(funcionario_id: str, nivel_acesso: str = 'VISUALIZACAO', ativo
     cur.execute("""
         INSERT INTO usuarios (id, funcionario_id, username, password, nivel_acesso, ativo, deve_trocar_senha, created_at, updated_at)
         VALUES (?, ?, ?, 'funsolos1980', ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    """, (usuario_id, funcionario_id, username, _upper(nivel_acesso) or 'VISUALIZACAO', 1 if ativo else 0))
+    """, (usuario_id, funcionario_id, username, _normalize_perfil_acesso(nivel_acesso) or 'VISUALIZACAO', 1 if ativo else 0))
     conn.commit()
     return usuario_id
 
@@ -2194,12 +2232,29 @@ def atualizar_usuario(usuario_id: str, funcionario_id: str, nivel_acesso: str = 
         cur.execute("SELECT id FROM usuarios WHERE funcionario_id = ? AND id <> ?", (funcionario_id, usuario_id))
         if cur.fetchone():
             raise ValueError('Este funcionário já possui outro usuário.')
-    cur.execute("UPDATE usuarios SET funcionario_id = ?, nivel_acesso = ?, ativo = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (funcionario_id or None, _upper(nivel_acesso) or 'VISUALIZACAO', 1 if ativo else 0, usuario_id))
+    cur.execute("UPDATE usuarios SET funcionario_id = ?, nivel_acesso = ?, ativo = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (funcionario_id or None, _normalize_perfil_acesso(nivel_acesso) or 'VISUALIZACAO', 1 if ativo else 0, usuario_id))
     conn.commit()
 
 
-def resetar_senha_usuario(usuario_id: str):
-    alterar_senha_usuario(usuario_id, 'funsolos1980', True)
+def resetar_senha_usuario(usuario_id: str, enviar_email: bool = True):
+    cur = _cursor()
+    cur.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,))
+    row = cur.fetchone()
+    if not row:
+        raise ValueError('Usuário não encontrado.')
+    row = dict(row)
+    senha_temporaria = _gerar_senha_temporaria() if '_gerar_senha_temporaria' in globals() else 'Temp12345'
+    alterar_senha_usuario(usuario_id, senha_temporaria, True)
+    email_enviado = False
+    if enviar_email and 'enviar_credenciais_usuario_email' in globals():
+        email = _normalizar_email(row.get('email')) if '_normalizar_email' in globals() else str(row.get('email') or '').strip()
+        if not email:
+            raise ValueError('Usuário sem e-mail cadastrado para envio de credenciais.')
+        try:
+            email_enviado = enviar_credenciais_usuario_email(row.get('nome') or row.get('username'), email, row.get('username'), senha_temporaria)
+        except Exception:
+            email_enviado = False
+    return {'id': usuario_id, 'username': row.get('username'), 'senha_temporaria': senha_temporaria, 'email_enviado': email_enviado}
 
 
 def excluir_usuario(usuario_id: str):
@@ -4981,3 +5036,1534 @@ def get_os_detalhe(os_id: str):
         'anexos': anexos,
         'totais': totais,
     }
+
+# ===== Segurança, e-mail e auditoria (2026-04-21) =====
+from nicegui import app
+import base64
+import hashlib
+import hmac
+import secrets
+import smtplib
+from email.message import EmailMessage
+from config.settings import (
+    SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_USE_TLS,
+    SMTP_FROM_EMAIL, SMTP_FROM_NAME, APP_BASE_URL,
+)
+
+
+def _hash_password(password: str, iterations: int = 200_000) -> str:
+    password = str(password or '')
+    if not password:
+        raise ValueError('Senha inválida.')
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, int(iterations))
+    return f"pbkdf2_sha256${int(iterations)}${base64.b64encode(salt).decode()}${base64.b64encode(digest).decode()}"
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    password = str(password or '')
+    stored = str(stored or '')
+    if not stored:
+        return False
+    if stored.startswith('pbkdf2_sha256$'):
+        try:
+            _algo, raw_iter, raw_salt, raw_hash = stored.split('$', 3)
+            iterations = int(raw_iter)
+            salt = base64.b64decode(raw_salt.encode())
+            expected = base64.b64decode(raw_hash.encode())
+            current = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, iterations)
+            return hmac.compare_digest(current, expected)
+        except Exception:
+            return False
+    return hmac.compare_digest(password, stored)
+
+
+def _needs_password_upgrade(stored: str) -> bool:
+    return not str(stored or '').startswith('pbkdf2_sha256$')
+
+
+def _gerar_senha_temporaria(tamanho: int = 14) -> str:
+    # Evita caracteres ambíguos e símbolos que costumam gerar cópia incorreta do e-mail.
+    alfabeto = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+    return ''.join(secrets.choice(alfabeto) for _ in range(max(12, int(tamanho))))
+
+
+def _smtp_configurado() -> bool:
+    return bool(SMTP_HOST and SMTP_PORT and SMTP_FROM_EMAIL)
+
+
+def _enviar_email(destinatario: str, assunto: str, corpo_texto: str) -> bool:
+    destinatario = str(destinatario or '').strip()
+    if not destinatario or not _smtp_configurado():
+        return False
+    msg = EmailMessage()
+    msg['Subject'] = assunto
+    msg['From'] = f'{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>' if SMTP_FROM_NAME else SMTP_FROM_EMAIL
+    msg['To'] = destinatario
+    msg.set_content(corpo_texto)
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+        if SMTP_USE_TLS:
+            server.starttls()
+        if SMTP_USER:
+            server.login(SMTP_USER, SMTP_PASSWORD)
+        server.send_message(msg)
+    return True
+
+
+def enviar_credenciais_usuario_email(nome: str, email: str, username: str, senha_temporaria: str) -> bool:
+    nome = str(nome or '').strip() or 'Usuário'
+    url = APP_BASE_URL or 'URL_DO_APP_NAO_CONFIGURADA'
+    corpo = f'''Olá, {nome}.
+
+Seu acesso ao Maintenance APP foi criado/atualizado.
+
+Usuário: {username}
+Senha temporária: {senha_temporaria}
+
+No primeiro acesso, altere a senha imediatamente.
+Link de acesso: {url}
+'''
+    return _enviar_email(email, 'Credenciais de acesso - Maintenance APP', corpo)
+
+
+def _ensure_security_audit_schema():
+    cur = _cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id TEXT PRIMARY KEY,
+            usuario_id TEXT NULL,
+            usuario_username TEXT NULL,
+            usuario_nome TEXT NULL,
+            acao TEXT NOT NULL,
+            entidade TEXT NOT NULL,
+            registro_id TEXT NULL,
+            detalhes_json TEXT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    try:
+        cols = _get_columns('usuarios')
+    except Exception:
+        cols = []
+    alteracoes = {
+        'nome': "ALTER TABLE usuarios ADD COLUMN nome TEXT NULL",
+        'email': "ALTER TABLE usuarios ADD COLUMN email TEXT NULL",
+        'pode_ver_logs': "ALTER TABLE usuarios ADD COLUMN pode_ver_logs INTEGER NOT NULL DEFAULT 0",
+    }
+    for coluna, ddl in alteracoes.items():
+        if coluna not in cols:
+            try:
+                cur.execute(ddl)
+            except Exception:
+                pass
+    try:
+        cur.execute("UPDATE usuarios SET nome = COALESCE(nome, username) WHERE COALESCE(nome, '') = ''")
+    except Exception:
+        pass
+    try:
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC)")
+    except Exception:
+        pass
+    try:
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_usuario_username ON audit_logs(usuario_username)")
+    except Exception:
+        pass
+    conn.commit()
+
+
+_ensure_security_audit_schema()
+
+
+# ===== CONTROLE GRANULAR DE ACESSO (2026-04-21) =====
+
+PERFIS_ACESSO_PADRAO = ['ADMIN', 'GESTOR', 'PLANEJADOR', 'EXECUTOR', 'VISUALIZACAO']
+MODULOS_SISTEMA = ['HOME', 'ARVORE', 'EQUIPAMENTOS', 'OS', 'EQUIPES', 'FUNCIONARIOS', 'USUARIOS', 'DASHBOARD', 'LOGS']
+CAMPOS_PERMISSAO_SISTEMA = [
+    'ver_menu',
+    'abrir_tela',
+    'criar',
+    'editar',
+    'excluir',
+    'exportar',
+    'aprovar_liberar',
+    'ver_logs',
+    'gerenciar_usuarios',
+    'gerenciar_permissoes',
+]
+
+
+def _permissoes_padrao_por_perfil() -> dict:
+    tudo = {k: 1 for k in CAMPOS_PERMISSAO_SISTEMA}
+    zero = {k: 0 for k in CAMPOS_PERMISSAO_SISTEMA}
+
+    admin = {mod: dict(tudo) for mod in MODULOS_SISTEMA}
+
+    gestor = {mod: dict(zero) for mod in MODULOS_SISTEMA}
+    for mod in ['HOME', 'ARVORE', 'EQUIPAMENTOS', 'OS', 'EQUIPES', 'FUNCIONARIOS', 'DASHBOARD']:
+        gestor[mod].update({'ver_menu': 1, 'abrir_tela': 1, 'criar': 1, 'editar': 1, 'exportar': 1})
+    gestor['OS'].update({'aprovar_liberar': 1})
+    gestor['LOGS'].update({'ver_menu': 1, 'abrir_tela': 1, 'ver_logs': 1, 'exportar': 1})
+
+    planejador = {mod: dict(zero) for mod in MODULOS_SISTEMA}
+    for mod in ['HOME', 'ARVORE', 'EQUIPAMENTOS', 'OS', 'DASHBOARD']:
+        planejador[mod].update({'ver_menu': 1, 'abrir_tela': 1})
+    planejador['EQUIPAMENTOS'].update({'criar': 1, 'editar': 1, 'exportar': 1})
+    planejador['OS'].update({'criar': 1, 'editar': 1, 'exportar': 1})
+
+    executor = {mod: dict(zero) for mod in MODULOS_SISTEMA}
+    for mod in ['HOME', 'ARVORE', 'OS']:
+        executor[mod].update({'ver_menu': 1, 'abrir_tela': 1})
+    executor['OS'].update({'criar': 1, 'editar': 1})
+
+    visual = {mod: dict(zero) for mod in MODULOS_SISTEMA}
+    for mod in ['HOME', 'ARVORE', 'OS', 'DASHBOARD']:
+        visual[mod].update({'ver_menu': 1, 'abrir_tela': 1})
+
+    return {
+        'ADMIN': admin,
+        'GESTOR': gestor,
+        'PLANEJADOR': planejador,
+        'EXECUTOR': executor,
+        'VISUALIZACAO': visual,
+    }
+
+
+def _normalize_perfil_acesso(nome: str) -> str:
+    valor = str(nome or '').strip().upper()
+    mapa = {
+        'GERENCIA': 'GESTOR',
+        'COMPLETO': 'GESTOR',
+        'TECNICO': 'EXECUTOR',
+    }
+    valor = mapa.get(valor, valor)
+    return valor if valor in PERFIS_ACESSO_PADRAO else 'VISUALIZACAO'
+
+
+def _ensure_access_control_schema():
+    cur = _cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS perfis_acesso (
+            nome TEXT PRIMARY KEY,
+            descricao TEXT NULL,
+            ativo INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS perfil_permissoes (
+            id TEXT PRIMARY KEY,
+            perfil_nome TEXT NOT NULL,
+            modulo TEXT NOT NULL,
+            ver_menu INTEGER NOT NULL DEFAULT 0,
+            abrir_tela INTEGER NOT NULL DEFAULT 0,
+            criar INTEGER NOT NULL DEFAULT 0,
+            editar INTEGER NOT NULL DEFAULT 0,
+            excluir INTEGER NOT NULL DEFAULT 0,
+            exportar INTEGER NOT NULL DEFAULT 0,
+            aprovar_liberar INTEGER NOT NULL DEFAULT 0,
+            ver_logs INTEGER NOT NULL DEFAULT 0,
+            gerenciar_usuarios INTEGER NOT NULL DEFAULT 0,
+            gerenciar_permissoes INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(perfil_nome, modulo)
+        )
+    """)
+    defaults = _permissoes_padrao_por_perfil()
+    descricoes = {
+        'ADMIN': 'Administrador do sistema',
+        'GESTOR': 'Gestor com amplo acesso operacional',
+        'PLANEJADOR': 'Perfil focado em planejamento',
+        'EXECUTOR': 'Perfil focado na execução',
+        'VISUALIZACAO': 'Perfil de consulta',
+    }
+    for perfil in PERFIS_ACESSO_PADRAO:
+        try:
+            cur.execute(
+                "INSERT INTO perfis_acesso (nome, descricao, ativo, created_at, updated_at) VALUES (?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) ON CONFLICT (nome) DO NOTHING",
+                (perfil, descricoes.get(perfil)),
+            )
+        except Exception:
+            pass
+        for modulo in MODULOS_SISTEMA:
+            valores = defaults[perfil][modulo]
+            try:
+                cur.execute(
+                    f"""
+                    INSERT INTO perfil_permissoes (
+                        id, perfil_nome, modulo, {", ".join(CAMPOS_PERMISSAO_SISTEMA)}, created_at, updated_at
+                    )
+                    VALUES (
+                        ?, ?, ?, {", ".join(["?"] * len(CAMPOS_PERMISSAO_SISTEMA))}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    )
+                    ON CONFLICT (perfil_nome, modulo) DO NOTHING
+                    """,
+                    (str(uuid.uuid4()), perfil, modulo, *[int(valores[c]) for c in CAMPOS_PERMISSAO_SISTEMA]),
+                )
+            except Exception:
+                pass
+    try:
+        cur.execute("UPDATE usuarios SET nivel_acesso = 'GESTOR' WHERE upper(nivel_acesso) IN ('GERENCIA', 'COMPLETO')")
+    except Exception:
+        pass
+    try:
+        cur.execute("UPDATE usuarios SET nivel_acesso = 'EXECUTOR' WHERE upper(nivel_acesso) = 'TECNICO'")
+    except Exception:
+        pass
+    try:
+        cur.execute("UPDATE usuarios SET nivel_acesso = 'ADMIN' WHERE lower(username) = 'admin'")
+    except Exception:
+        pass
+    conn.commit()
+
+
+def listar_perfis_acesso():
+    cur = _cursor()
+    cur.execute("""
+        SELECT nome, descricao, ativo
+        FROM perfis_acesso
+        WHERE ativo = 1
+        ORDER BY CASE nome
+            WHEN 'ADMIN' THEN 1
+            WHEN 'GESTOR' THEN 2
+            WHEN 'PLANEJADOR' THEN 3
+            WHEN 'EXECUTOR' THEN 4
+            ELSE 5
+        END, nome
+    """)
+    return [dict(r) for r in cur.fetchall()]
+
+
+def listar_permissoes_perfil(perfil_nome: str):
+    perfil_nome = _normalize_perfil_acesso(perfil_nome)
+    cur = _cursor()
+    cur.execute(
+        f"SELECT perfil_nome, modulo, {', '.join(CAMPOS_PERMISSAO_SISTEMA)} FROM perfil_permissoes WHERE perfil_nome = ? ORDER BY modulo",
+        (perfil_nome,),
+    )
+    return [dict(r) for r in cur.fetchall()]
+
+
+def obter_mapa_permissoes_perfil(perfil_nome: str) -> dict:
+    linhas = listar_permissoes_perfil(perfil_nome)
+    mapa = {}
+    for item in linhas:
+        modulo = str(item.get('modulo') or '').upper()
+        mapa[modulo] = {campo: bool(item.get(campo, 0)) for campo in CAMPOS_PERMISSAO_SISTEMA}
+    return mapa
+
+
+def atualizar_permissoes_perfil(perfil_nome: str, modulo: str, permissoes: dict):
+    perfil_nome = _normalize_perfil_acesso(perfil_nome)
+    modulo = str(modulo or '').strip().upper()
+    if perfil_nome == 'ADMIN':
+        raise ValueError('O perfil ADMIN é fixo e não pode ser alterado.')
+    if modulo not in MODULOS_SISTEMA:
+        raise ValueError('Módulo inválido.')
+    payload = {campo: 1 if bool((permissoes or {}).get(campo)) else 0 for campo in CAMPOS_PERMISSAO_SISTEMA}
+    cur = _cursor()
+    cur.execute(
+        f"""
+        UPDATE perfil_permissoes
+        SET {", ".join([f"{campo} = ?" for campo in CAMPOS_PERMISSAO_SISTEMA])},
+            updated_at = CURRENT_TIMESTAMP
+        WHERE perfil_nome = ? AND modulo = ?
+        """,
+        (*[payload[c] for c in CAMPOS_PERMISSAO_SISTEMA], perfil_nome, modulo),
+    )
+    conn.commit()
+    try:
+        registrar_log_acao('ATUALIZAR', 'USUARIO', None, {
+            'tipo': 'PERFIL_PERMISSOES',
+            'perfil_nome': perfil_nome,
+            'modulo': modulo,
+            'permissoes': payload,
+        })
+    except Exception:
+        pass
+    return {'perfil_nome': perfil_nome, 'modulo': modulo, 'permissoes': payload}
+
+
+_ensure_access_control_schema()
+
+
+
+def registrar_log_acao(acao: str, entidade: str, registro_id: str = None, detalhes: dict | None = None, usuario_id: str = None):
+    cur = _cursor()
+    usuario = None
+    if usuario_id:
+        try:
+            cur.execute("SELECT id, username, nome FROM usuarios WHERE id = ?", (usuario_id,))
+            row = cur.fetchone()
+            usuario = dict(row) if row else None
+        except Exception:
+            usuario = None
+    elif 'app' in globals():
+        try:
+            sess = app.storage.user
+            if sess.get('usuario_id'):
+                usuario = {'id': sess.get('usuario_id'), 'username': sess.get('username'), 'nome': sess.get('name')}
+        except Exception:
+            usuario = None
+    log_id = str(uuid.uuid4())
+    payload = json.dumps(detalhes or {}, ensure_ascii=False)
+    cur.execute(
+        """
+        INSERT INTO audit_logs (id, usuario_id, usuario_username, usuario_nome, acao, entidade, registro_id, detalhes_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """,
+        (
+            log_id,
+            usuario.get('id') if usuario else None,
+            usuario.get('username') if usuario else None,
+            usuario.get('nome') if usuario else None,
+            _upper(acao),
+            _upper(entidade),
+            registro_id or None,
+            payload,
+        ),
+    )
+    conn.commit()
+    return log_id
+
+
+def listar_logs_acoes(limit: int = 200, busca: str = None, acao: str = None, entidade: str = None):
+    limit = max(1, min(int(limit or 200), 1000))
+    where = []
+    params = []
+    busca = str(busca or '').strip()
+    if busca:
+        like = f"%{_upper(busca)}%"
+        where.append("(UPPER(COALESCE(usuario_username, '')) LIKE ? OR UPPER(COALESCE(usuario_nome, '')) LIKE ? OR UPPER(COALESCE(registro_id, '')) LIKE ? OR UPPER(COALESCE(detalhes_json, '')) LIKE ?)")
+        params.extend([like, like, like, like])
+    if acao:
+        where.append("UPPER(COALESCE(acao, '')) = ?")
+        params.append(_upper(acao))
+    if entidade:
+        where.append("UPPER(COALESCE(entidade, '')) = ?")
+        params.append(_upper(entidade))
+    where_sql = ('WHERE ' + ' AND '.join(where)) if where else ''
+    cur = _cursor()
+    cur.execute(f"SELECT * FROM audit_logs {where_sql} ORDER BY created_at DESC LIMIT ?", tuple(params + [limit]))
+    rows = []
+    for row in cur.fetchall():
+        item = dict(row)
+        try:
+            parsed = json.loads(item.get('detalhes_json') or '{}')
+        except Exception:
+            parsed = {}
+        item['detalhes'] = parsed
+        item['detalhes_texto'] = '\n'.join(f"{k}: {v}" for k, v in parsed.items() if v not in (None, '', []))
+        rows.append(item)
+    return rows
+
+
+def _normalizar_email(email: str) -> str | None:
+    email = str(email or '').strip().lower()
+    return email or None
+
+
+def _sugerir_username_por_nome(nome: str) -> str:
+    base = _slug_username(nome)
+    if not base:
+        base = 'usuario'
+    username = base
+    cur = _cursor()
+    seq = 1
+    while True:
+        cur.execute("SELECT id FROM usuarios WHERE lower(username) = ?", (username.lower(),))
+        if not cur.fetchone():
+            return username
+        seq += 1
+        username = f'{base}{seq}'
+
+
+def _resolver_nome_exibicao_usuario(funcionario_id: str = None, nome: str = None):
+    if funcionario_id:
+        func = get_funcionario(funcionario_id)
+        if not func:
+            raise ValueError('Funcionário não encontrado.')
+        return func.get('nome') or nome or '', func
+    nome = _upper(nome)
+    if not nome:
+        raise ValueError('Informe o nome do usuário.')
+    return nome, None
+
+
+def autenticar_usuario(username: str, password: str):
+    username = str(username or '').strip().lower()
+    password = str(password or '').strip()
+    if not username:
+        return False, 'Informe o usuário.', None
+    cur = _cursor()
+    cur.execute(
+        """
+        SELECT u.*, f.nome AS nome_funcionario,
+               COALESCE(u.nome, f.nome, u.username) AS nome_exibicao
+        FROM usuarios u
+        LEFT JOIN funcionarios f ON f.id = u.funcionario_id
+        WHERE lower(u.username) = ? AND u.ativo = 1
+        """,
+        (username,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return False, 'Usuário não encontrado.', None
+    row = dict(row)
+    if not _verify_password(password, row.get('password')):
+        return False, 'Senha incorreta.', None
+    if _needs_password_upgrade(row.get('password')):
+        try:
+            alterar_senha_usuario(row.get('id'), password, bool(row.get('deve_trocar_senha', 0)))
+            cur.execute("SELECT * FROM usuarios WHERE id = ?", (row.get('id'),))
+            row2 = cur.fetchone()
+            if row2:
+                row.update(dict(row2))
+        except Exception:
+            pass
+    return True, '', row
+
+
+def alterar_senha_usuario(usuario_id: str, nova_senha: str, deve_trocar: bool = False):
+    if not usuario_id:
+        raise ValueError('Usuário inválido.')
+    if len(str(nova_senha or '').strip()) < 4:
+        raise ValueError('A senha deve ter pelo menos 4 caracteres.')
+    cur = _cursor()
+    cur.execute(
+        """
+        UPDATE usuarios
+        SET password = ?, deve_trocar_senha = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (_hash_password(nova_senha), 1 if deve_trocar else 0, usuario_id),
+    )
+    conn.commit()
+    try:
+        registrar_log_acao('ALTERAR_SENHA', 'USUARIO', usuario_id, {'deve_trocar_senha': bool(deve_trocar)})
+    except Exception:
+        pass
+
+
+def listar_usuarios():
+    cur = _cursor()
+    cur.execute(
+        """
+        SELECT u.*, f.nome AS nome_funcionario, e.nome AS equipe_nome,
+               COALESCE(u.nome, f.nome, u.username) AS nome_exibicao
+        FROM usuarios u
+        LEFT JOIN funcionarios f ON f.id = u.funcionario_id
+        LEFT JOIN equipes e ON e.id = f.equipe_id
+        ORDER BY u.username
+        """
+    )
+    return [dict(r) for r in cur.fetchall()]
+
+
+def sugerir_username_funcionario(funcionario_id: str) -> str:
+    func = get_funcionario(funcionario_id)
+    if not func:
+        raise ValueError('Funcionário não encontrado.')
+    return _sugerir_username_por_nome(func.get('nome'))
+
+
+def criar_usuario(funcionario_id: str = None, nome: str = None, email: str = None, username: str = None,
+                 nivel_acesso: str = 'VISUALIZACAO', ativo: bool = True, pode_ver_logs: bool = False,
+                 enviar_email: bool = True):
+    nome_exibicao, _func = _resolver_nome_exibicao_usuario(funcionario_id, nome)
+    email = _normalizar_email(email)
+    if not email:
+        raise ValueError('Informe o e-mail do usuário.')
+    cur = _cursor()
+    if funcionario_id:
+        cur.execute("SELECT id FROM usuarios WHERE funcionario_id = ?", (funcionario_id,))
+        if cur.fetchone():
+            raise ValueError('Este funcionário já possui usuário.')
+    username = str(username or '').strip().lower() or (sugerir_username_funcionario(funcionario_id) if funcionario_id else _sugerir_username_por_nome(nome_exibicao))
+    cur.execute("SELECT id FROM usuarios WHERE lower(username) = ?", (username.lower(),))
+    if cur.fetchone():
+        raise ValueError('O usuário informado já existe.')
+    usuario_id = str(uuid.uuid4())
+    senha_temporaria = _gerar_senha_temporaria()
+    cur.execute(
+        """
+        INSERT INTO usuarios (id, funcionario_id, nome, email, username, password, nivel_acesso, ativo, deve_trocar_senha, pode_ver_logs, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        (
+            usuario_id,
+            funcionario_id or None,
+            nome_exibicao,
+            email,
+            username,
+            _hash_password(senha_temporaria),
+            _normalize_perfil_acesso(nivel_acesso) or 'VISUALIZACAO',
+            1 if ativo else 0,
+            1 if pode_ver_logs else 0,
+        ),
+    )
+    conn.commit()
+    email_enviado = False
+    if enviar_email:
+        try:
+            email_enviado = enviar_credenciais_usuario_email(nome_exibicao, email, username, senha_temporaria)
+        except Exception:
+            email_enviado = False
+    try:
+        registrar_log_acao('CRIAR', 'USUARIO', usuario_id, {
+            'username': username,
+            'nome': nome_exibicao,
+            'email': email,
+            'tipo': 'FUNCIONARIO' if funcionario_id else 'EXTERNO',
+            'nivel_acesso': _normalize_perfil_acesso(nivel_acesso),
+            'pode_ver_logs': bool(pode_ver_logs),
+            'email_enviado': email_enviado,
+        })
+    except Exception:
+        pass
+    return {'id': usuario_id, 'username': username, 'senha_temporaria': senha_temporaria, 'email_enviado': email_enviado}
+
+
+def atualizar_usuario(usuario_id: str, funcionario_id: str = None, nome: str = None, email: str = None, username: str = None,
+                     nivel_acesso: str = 'VISUALIZACAO', ativo: bool = True, pode_ver_logs: bool = False,
+                     enviar_email: bool = False):
+    cur = _cursor()
+    cur.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,))
+    atual = cur.fetchone()
+    if not atual:
+        raise ValueError('Usuário não encontrado.')
+    atual = dict(atual)
+    nome_exibicao, _func = _resolver_nome_exibicao_usuario(funcionario_id, nome or atual.get('nome'))
+    email = _normalizar_email(email) or _normalizar_email(atual.get('email'))
+    if not email:
+        raise ValueError('Informe o e-mail do usuário.')
+    if funcionario_id:
+        cur.execute("SELECT id FROM usuarios WHERE funcionario_id = ? AND id <> ?", (funcionario_id, usuario_id))
+        if cur.fetchone():
+            raise ValueError('Este funcionário já possui outro usuário.')
+    username = str(username or '').strip().lower() or str(atual.get('username') or '').strip().lower()
+    if not username:
+        username = sugerir_username_funcionario(funcionario_id) if funcionario_id else _sugerir_username_por_nome(nome_exibicao)
+    cur.execute("SELECT id FROM usuarios WHERE lower(username) = ? AND id <> ?", (username.lower(), usuario_id))
+    if cur.fetchone():
+        raise ValueError('O usuário informado já existe.')
+    cur.execute(
+        """
+        UPDATE usuarios
+        SET funcionario_id = ?, nome = ?, email = ?, username = ?, nivel_acesso = ?, ativo = ?, pode_ver_logs = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (
+            funcionario_id or None,
+            nome_exibicao,
+            email,
+            username,
+            _normalize_perfil_acesso(nivel_acesso) or 'VISUALIZACAO',
+            1 if ativo else 0,
+            1 if pode_ver_logs else 0,
+            usuario_id,
+        ),
+    )
+    conn.commit()
+    email_enviado = False
+    if enviar_email:
+        resultado_reset = resetar_senha_usuario(usuario_id, enviar_email=True)
+        email_enviado = bool(resultado_reset.get('email_enviado'))
+    try:
+        registrar_log_acao('ATUALIZAR', 'USUARIO', usuario_id, {
+            'username': username,
+            'nome': nome_exibicao,
+            'email': email,
+            'tipo': 'FUNCIONARIO' if funcionario_id else 'EXTERNO',
+            'nivel_acesso': _normalize_perfil_acesso(nivel_acesso),
+            'ativo': bool(ativo),
+            'pode_ver_logs': bool(pode_ver_logs),
+            'email_enviado': email_enviado,
+        })
+    except Exception:
+        pass
+    return {'id': usuario_id, 'username': username, 'email_enviado': email_enviado}
+
+
+def resetar_senha_usuario(usuario_id: str, enviar_email: bool = True):
+    cur = _cursor()
+    cur.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,))
+    row = cur.fetchone()
+    if not row:
+        raise ValueError('Usuário não encontrado.')
+    row = dict(row)
+    senha_temporaria = _gerar_senha_temporaria()
+    alterar_senha_usuario(usuario_id, senha_temporaria, True)
+    email_enviado = False
+    if enviar_email:
+        email = _normalizar_email(row.get('email'))
+        if not email:
+            raise ValueError('Usuário sem e-mail cadastrado para envio de credenciais.')
+        try:
+            email_enviado = enviar_credenciais_usuario_email(row.get('nome') or row.get('username'), email, row.get('username'), senha_temporaria)
+        except Exception:
+            email_enviado = False
+    try:
+        registrar_log_acao('RESETAR_SENHA', 'USUARIO', usuario_id, {'email_enviado': email_enviado})
+    except Exception:
+        pass
+    return {'id': usuario_id, 'username': row.get('username'), 'senha_temporaria': senha_temporaria, 'email_enviado': email_enviado}
+
+
+def excluir_usuario(usuario_id: str):
+    cur = _cursor()
+    cur.execute("SELECT username FROM usuarios WHERE id = ?", (usuario_id,))
+    row = cur.fetchone()
+    if row and str(row[0] or '').lower() == 'admin':
+        raise ValueError('O usuário admin não pode ser excluído.')
+    cur.execute("DELETE FROM usuarios WHERE id = ?", (usuario_id,))
+    conn.commit()
+    try:
+        registrar_log_acao('EXCLUIR', 'USUARIO', usuario_id, {'username': row[0] if row else None})
+    except Exception:
+        pass
+
+
+def registrar_login_usuario(usuario_id: str):
+    if usuario_id:
+        try:
+            registrar_log_acao('LOGIN', 'USUARIO', usuario_id, {})
+        except Exception:
+            pass
+
+
+def registrar_logout_usuario(usuario_id: str):
+    if usuario_id:
+        try:
+            registrar_log_acao('LOGOUT', 'USUARIO', usuario_id, {})
+        except Exception:
+            pass
+
+
+def _audit_wrap(func_name: str, acao: str, entidade: str, id_from_result: bool = False, id_kw: str = None):
+    original = globals().get(func_name)
+    if not callable(original):
+        return
+    def wrapped(*args, **kwargs):
+        result = original(*args, **kwargs)
+        try:
+            registro_id = None
+            if id_from_result:
+                registro_id = result.get('id') if isinstance(result, dict) else result
+            elif id_kw:
+                if id_kw in kwargs:
+                    registro_id = kwargs.get(id_kw)
+                elif args:
+                    registro_id = args[0]
+            registrar_log_acao(acao, entidade, registro_id, {})
+        except Exception:
+            pass
+        return result
+    globals()[func_name] = wrapped
+
+
+_audit_wrap('criar_ativo', 'CRIAR', 'ATIVO', id_from_result=True)
+_audit_wrap('atualizar_ativo', 'ATUALIZAR', 'ATIVO', id_kw='ativo_id')
+_audit_wrap('excluir_ativo', 'EXCLUIR', 'ATIVO', id_kw='ativo_id')
+_audit_wrap('criar_os', 'CRIAR', 'OS', id_from_result=True)
+_audit_wrap('atualizar_os', 'ATUALIZAR', 'OS', id_kw='os_id')
+_audit_wrap('excluir_os', 'EXCLUIR', 'OS', id_kw='os_id')
+_audit_wrap('criar_os_atividade', 'CRIAR', 'OS_ATIVIDADE', id_from_result=True)
+_audit_wrap('atualizar_os_atividade', 'ATUALIZAR', 'OS_ATIVIDADE', id_kw='atividade_id')
+_audit_wrap('excluir_os_atividade', 'EXCLUIR', 'OS_ATIVIDADE', id_kw='atividade_id')
+_audit_wrap('criar_os_apontamento', 'CRIAR', 'OS_APONTAMENTO', id_from_result=True)
+_audit_wrap('atualizar_os_apontamento', 'ATUALIZAR', 'OS_APONTAMENTO', id_kw='apontamento_id')
+_audit_wrap('excluir_os_apontamento', 'EXCLUIR', 'OS_APONTAMENTO', id_kw='apontamento_id')
+_audit_wrap('criar_os_material', 'CRIAR', 'OS_MATERIAL', id_from_result=True)
+_audit_wrap('excluir_os_material', 'EXCLUIR', 'OS_MATERIAL', id_kw='material_id')
+_audit_wrap('criar_equipe', 'CRIAR', 'EQUIPE', id_from_result=True)
+_audit_wrap('atualizar_equipe', 'ATUALIZAR', 'EQUIPE', id_kw='equipe_id')
+_audit_wrap('excluir_equipe', 'EXCLUIR', 'EQUIPE', id_kw='equipe_id')
+_audit_wrap('criar_escala', 'CRIAR', 'ESCALA', id_from_result=True)
+_audit_wrap('atualizar_escala', 'ATUALIZAR', 'ESCALA', id_kw='escala_id')
+_audit_wrap('excluir_escala', 'EXCLUIR', 'ESCALA', id_kw='escala_id')
+_audit_wrap('criar_funcionario', 'CRIAR', 'FUNCIONARIO', id_from_result=True)
+_audit_wrap('atualizar_funcionario', 'ATUALIZAR', 'FUNCIONARIO', id_kw='funcionario_id')
+_audit_wrap('excluir_funcionario', 'EXCLUIR', 'FUNCIONARIO', id_kw='funcionario_id')
+
+# ===== FINAL PATCH - RESET POR LINK + EXPORT LOG SUPPORT (2026-04-21) =====
+from datetime import datetime, timedelta
+
+
+def _utc_now() -> datetime:
+    return datetime.utcnow()
+
+
+def _format_sqlite_dt(dt: datetime) -> str:
+    return dt.strftime('%Y-%m-%d %H:%M:%S')
+
+
+def _parse_db_datetime(value):
+    raw = str(value or '').strip()
+    if not raw:
+        return None
+    raw = raw.replace('T', ' ').replace('Z', '')
+    for fmt in ('%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
+        try:
+            return datetime.strptime(raw, fmt)
+        except Exception:
+            pass
+    try:
+        return datetime.fromisoformat(raw)
+    except Exception:
+        return None
+
+
+def _sha256_hex(value: str) -> str:
+    return hashlib.sha256(str(value or '').encode('utf-8')).hexdigest()
+
+
+def _ensure_password_reset_schema():
+    cur = _cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id TEXT PRIMARY KEY,
+            usuario_id TEXT NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            finalidade TEXT NOT NULL DEFAULT 'RESET_SENHA',
+            expires_at TEXT NOT NULL,
+            used_at TEXT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+        )
+        """
+    )
+    try:
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_usuario_id ON password_reset_tokens(usuario_id)")
+    except Exception:
+        pass
+    try:
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_expires_at ON password_reset_tokens(expires_at)")
+    except Exception:
+        pass
+    conn.commit()
+
+
+_ensure_password_reset_schema()
+
+
+def _invalidate_password_reset_tokens(usuario_id: str):
+    cur = _cursor()
+    cur.execute(
+        """
+        UPDATE password_reset_tokens
+        SET used_at = CURRENT_TIMESTAMP
+        WHERE usuario_id = ? AND used_at IS NULL
+        """,
+        (usuario_id,),
+    )
+    conn.commit()
+
+
+def criar_token_redefinicao_usuario(usuario_id: str, validade_horas: int = 24, finalidade: str = 'RESET_SENHA'):
+    cur = _cursor()
+    cur.execute("SELECT id, username, nome, email, ativo FROM usuarios WHERE id = ?", (usuario_id,))
+    row = cur.fetchone()
+    if not row:
+        raise ValueError('Usuário não encontrado.')
+    row = dict(row)
+    if not bool(row.get('ativo', 1)):
+        raise ValueError('Usuário inativo.')
+    email = _normalizar_email(row.get('email'))
+    if not email:
+        raise ValueError('Usuário sem e-mail cadastrado.')
+    _invalidate_password_reset_tokens(usuario_id)
+    token = secrets.token_urlsafe(32)
+    token_hash = _sha256_hex(token)
+    expires_at = _utc_now() + timedelta(hours=max(1, int(validade_horas or 24)))
+    token_id = str(uuid.uuid4())
+    cur.execute(
+        """
+        INSERT INTO password_reset_tokens (id, usuario_id, token_hash, finalidade, expires_at, used_at, created_at)
+        VALUES (?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)
+        """,
+        (token_id, usuario_id, token_hash, _upper(finalidade) or 'RESET_SENHA', _format_sqlite_dt(expires_at)),
+    )
+    conn.commit()
+    base_url = (APP_BASE_URL or '').rstrip('/')
+    link = f"{base_url}/definir-senha?token={token}" if base_url else f"/definir-senha?token={token}"
+    return {
+        'id': token_id,
+        'token': token,
+        'token_hash': token_hash,
+        'link': link,
+        'expires_at': _format_sqlite_dt(expires_at),
+        'usuario': row,
+    }
+
+
+def enviar_link_redefinicao_usuario_email(nome: str, email: str, username: str, link: str, expires_at: str, motivo: str = 'definição de senha') -> bool:
+    nome = str(nome or '').strip() or 'Usuário'
+    corpo = f'''Olá, {nome}.
+
+Recebemos uma solicitação de {motivo} para seu acesso ao Maintenance APP.
+
+Usuário: {username}
+Link seguro: {link}
+Validade até: {expires_at}
+
+Se você não reconhece esta ação, ignore este e-mail.
+'''
+    return _enviar_email(email, 'Link de acesso - Maintenance APP', corpo)
+
+
+def validar_token_redefinicao(token: str):
+    token = str(token or '').strip()
+    if not token:
+        return None
+    cur = _cursor()
+    cur.execute(
+        """
+        SELECT prt.*, u.username, u.nome, u.email, u.ativo
+        FROM password_reset_tokens prt
+        JOIN usuarios u ON u.id = prt.usuario_id
+        WHERE prt.token_hash = ?
+        LIMIT 1
+        """,
+        (_sha256_hex(token),),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    if item.get('used_at'):
+        return None
+    expires_at = _parse_db_datetime(item.get('expires_at'))
+    if not expires_at or expires_at < _utc_now():
+        return None
+    if not bool(item.get('ativo', 1)):
+        return None
+    item['nome_exibicao'] = item.get('nome') or item.get('username')
+    return item
+
+
+def consumir_token_redefinicao(token: str, nova_senha: str):
+    info = validar_token_redefinicao(token)
+    if not info:
+        raise ValueError('Link inválido, expirado ou já utilizado.')
+    alterar_senha_usuario(info['usuario_id'], nova_senha, False)
+    cur = _cursor()
+    cur.execute("UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = ?", (info['id'],))
+    conn.commit()
+    try:
+        registrar_log_acao('CONSUMIR_LINK_SENHA', 'USUARIO', info['usuario_id'], {'token_id': info['id']}, usuario_id=info['usuario_id'])
+    except Exception:
+        pass
+    return {'usuario_id': info['usuario_id'], 'username': info.get('username')}
+
+
+def criar_usuario(funcionario_id: str = None, nome: str = None, email: str = None, username: str = None,
+                 nivel_acesso: str = 'VISUALIZACAO', ativo: bool = True, pode_ver_logs: bool = False,
+                 enviar_email: bool = True):
+    nome_exibicao, _func = _resolver_nome_exibicao_usuario(funcionario_id, nome)
+    email = _normalizar_email(email)
+    if not email:
+        raise ValueError('Informe o e-mail do usuário.')
+    cur = _cursor()
+    if funcionario_id:
+        cur.execute("SELECT id FROM usuarios WHERE funcionario_id = ?", (funcionario_id,))
+        if cur.fetchone():
+            raise ValueError('Este funcionário já possui usuário.')
+    username = str(username or '').strip().lower() or (sugerir_username_funcionario(funcionario_id) if funcionario_id else _sugerir_username_por_nome(nome_exibicao))
+    cur.execute("SELECT id FROM usuarios WHERE lower(username) = ?", (username.lower(),))
+    if cur.fetchone():
+        raise ValueError('O usuário informado já existe.')
+    usuario_id = str(uuid.uuid4())
+    senha_placeholder = _gerar_senha_temporaria()
+    cur.execute(
+        """
+        INSERT INTO usuarios (id, funcionario_id, nome, email, username, password, nivel_acesso, ativo, deve_trocar_senha, pode_ver_logs, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        (usuario_id, funcionario_id or None, nome_exibicao, email, username, _hash_password(senha_placeholder), _normalize_perfil_acesso(nivel_acesso) or 'VISUALIZACAO', 1 if ativo else 0, 1 if pode_ver_logs else 0),
+    )
+    conn.commit()
+    email_enviado = False
+    link_redefinicao = None
+    if enviar_email:
+        try:
+            token_data = criar_token_redefinicao_usuario(usuario_id, validade_horas=24, finalidade='ATIVACAO_USUARIO')
+            link_redefinicao = token_data.get('link')
+            email_enviado = enviar_link_redefinicao_usuario_email(nome_exibicao, email, username, token_data['link'], token_data['expires_at'], 'definição de senha')
+        except Exception:
+            email_enviado = False
+    try:
+        registrar_log_acao('CRIAR', 'USUARIO', usuario_id, {'username': username, 'nome': nome_exibicao, 'email': email, 'tipo': 'FUNCIONARIO' if funcionario_id else 'EXTERNO', 'nivel_acesso': _normalize_perfil_acesso(nivel_acesso), 'pode_ver_logs': bool(pode_ver_logs), 'email_enviado': email_enviado, 'link_redefinicao_gerado': bool(link_redefinicao)})
+    except Exception:
+        pass
+    return {'id': usuario_id, 'username': username, 'email_enviado': email_enviado, 'link_redefinicao': link_redefinicao}
+
+
+def resetar_senha_usuario(usuario_id: str, enviar_email: bool = True):
+    cur = _cursor()
+    cur.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,))
+    row = cur.fetchone()
+    if not row:
+        raise ValueError('Usuário não encontrado.')
+    row = dict(row)
+    email = _normalizar_email(row.get('email'))
+    if enviar_email and not email:
+        raise ValueError('Usuário sem e-mail cadastrado para envio do link.')
+    token_data = criar_token_redefinicao_usuario(usuario_id, validade_horas=24, finalidade='RESET_SENHA')
+    email_enviado = False
+    if enviar_email:
+        try:
+            email_enviado = enviar_link_redefinicao_usuario_email(row.get('nome') or row.get('username'), email, row.get('username'), token_data['link'], token_data['expires_at'], 'redefinição de senha')
+        except Exception:
+            email_enviado = False
+    try:
+        registrar_log_acao('RESETAR_SENHA', 'USUARIO', usuario_id, {'email_enviado': email_enviado, 'token_id': token_data['id']})
+    except Exception:
+        pass
+    return {'id': usuario_id, 'username': row.get('username'), 'email_enviado': email_enviado, 'link_redefinicao': token_data['link']}
+
+
+# ===== PATCH v2: LOGS DETALHADOS POR PERFIS (2026-04-21) ===================
+# Substitui os _audit_wrap genéricos por funções de log enriquecidas.
+# Captura campos reais (tag, descrição, número OS, funcionário etc.)
+# sem alterar nenhuma tabela existente.
+
+def _log_ativo(acao: str, ativo_id: str, dados: dict | None = None):
+    """Log enriquecido para ativos/equipamentos."""
+    detalhes = {}
+    try:
+        cur = _cursor()
+        cur.execute("SELECT tag, descricao, tipo FROM ativos WHERE id = ?", (ativo_id,))
+        row = cur.fetchone()
+        if row:
+            r = dict(row)
+            detalhes = {'tag': r.get('tag'), 'descricao': r.get('descricao'), 'tipo': r.get('tipo')}
+    except Exception:
+        pass
+    if dados:
+        detalhes.update(dados)
+    try:
+        registrar_log_acao(acao, 'ATIVO', ativo_id, detalhes)
+    except Exception:
+        pass
+
+
+def _log_os(acao: str, os_id: str, dados: dict | None = None):
+    """Log enriquecido para ordens de serviço."""
+    detalhes = {}
+    try:
+        cur = _cursor()
+        cur.execute(
+            """SELECT os.numero, os.descricao, os.status, a.tag AS equipamento_tag
+               FROM ordens_servico os
+               LEFT JOIN ativos a ON a.id = os.equipamento_id
+               WHERE os.id = ?""",
+            (os_id,),
+        )
+        row = cur.fetchone()
+        if row:
+            r = dict(row)
+            detalhes = {
+                'numero_os': r.get('numero'),
+                'descricao': r.get('descricao'),
+                'status': r.get('status'),
+                'equipamento_tag': r.get('equipamento_tag'),
+            }
+    except Exception:
+        pass
+    if dados:
+        detalhes.update(dados)
+    try:
+        registrar_log_acao(acao, 'OS', os_id, detalhes)
+    except Exception:
+        pass
+
+
+def _log_equipe(acao: str, equipe_id: str):
+    detalhes = {}
+    try:
+        cur = _cursor()
+        cur.execute("SELECT nome FROM equipes WHERE id = ?", (equipe_id,))
+        row = cur.fetchone()
+        if row:
+            detalhes = {'nome': dict(row).get('nome')}
+    except Exception:
+        pass
+    try:
+        registrar_log_acao(acao, 'EQUIPE', equipe_id, detalhes)
+    except Exception:
+        pass
+
+
+def _log_funcionario(acao: str, funcionario_id: str):
+    detalhes = {}
+    try:
+        cur = _cursor()
+        cur.execute("SELECT nome, matricula FROM funcionarios WHERE id = ?", (funcionario_id,))
+        row = cur.fetchone()
+        if row:
+            r = dict(row)
+            detalhes = {'nome': r.get('nome'), 'matricula': r.get('matricula')}
+    except Exception:
+        pass
+    try:
+        registrar_log_acao(acao, 'FUNCIONARIO', funcionario_id, detalhes)
+    except Exception:
+        pass
+
+
+def _patch_log_rico():
+    """
+    Sobrescreve os wrappers genéricos (_audit_wrap) com versões que capturam
+    detalhes reais do banco. Chamado uma vez na inicialização.
+    """
+    import functools
+
+    # ── ATIVO ────────────────────────────────────────────────────────────────
+    _criar_ativo_orig = globals().get('criar_ativo')
+    if callable(_criar_ativo_orig):
+        @functools.wraps(_criar_ativo_orig)
+        def _criar_ativo_logged(*a, **kw):
+            result = _criar_ativo_orig(*a, **kw)
+            ativo_id = result.get('id') if isinstance(result, dict) else result
+            tag = kw.get('tag') or (a[0] if a else None)
+            descricao = kw.get('descricao') or (a[1] if len(a) > 1 else None)
+            tipo = kw.get('tipo') or (a[2] if len(a) > 2 else None)
+            try:
+                registrar_log_acao('CRIAR', 'ATIVO', ativo_id,
+                    {'tag': tag, 'descricao': descricao, 'tipo': tipo})
+            except Exception:
+                pass
+            return result
+        globals()['criar_ativo'] = _criar_ativo_logged
+
+    _atualizar_ativo_orig = globals().get('atualizar_ativo')
+    if callable(_atualizar_ativo_orig):
+        @functools.wraps(_atualizar_ativo_orig)
+        def _atualizar_ativo_logged(*a, **kw):
+            ativo_id = kw.get('ativo_id') or (a[0] if a else None)
+            # captura antes de alterar
+            detalhes_antes = {}
+            try:
+                cur = _cursor()
+                cur.execute("SELECT tag, descricao, tipo FROM ativos WHERE id = ?", (ativo_id,))
+                row = cur.fetchone()
+                if row:
+                    r = dict(row)
+                    detalhes_antes = {'tag_antes': r.get('tag'), 'descricao_antes': r.get('descricao')}
+            except Exception:
+                pass
+            result = _atualizar_ativo_orig(*a, **kw)
+            tag_novo = kw.get('tag')
+            try:
+                registrar_log_acao('ATUALIZAR', 'ATIVO', ativo_id,
+                    {**detalhes_antes, 'tag_novo': tag_novo, 'descricao_nova': kw.get('descricao')})
+            except Exception:
+                pass
+            return result
+        globals()['atualizar_ativo'] = _atualizar_ativo_logged
+
+    _excluir_ativo_orig = globals().get('excluir_ativo')
+    if callable(_excluir_ativo_orig):
+        @functools.wraps(_excluir_ativo_orig)
+        def _excluir_ativo_logged(*a, **kw):
+            ativo_id = kw.get('ativo_id') or (a[0] if a else None)
+            detalhes = {}
+            try:
+                cur = _cursor()
+                cur.execute("SELECT tag, descricao, tipo FROM ativos WHERE id = ?", (ativo_id,))
+                row = cur.fetchone()
+                if row:
+                    r = dict(row)
+                    detalhes = {'tag': r.get('tag'), 'descricao': r.get('descricao'), 'tipo': r.get('tipo')}
+            except Exception:
+                pass
+            result = _excluir_ativo_orig(*a, **kw)
+            try:
+                registrar_log_acao('EXCLUIR', 'ATIVO', ativo_id, detalhes)
+            except Exception:
+                pass
+            return result
+        globals()['excluir_ativo'] = _excluir_ativo_logged
+
+    # ── OS ───────────────────────────────────────────────────────────────────
+    _criar_os_orig = globals().get('criar_os')
+    if callable(_criar_os_orig):
+        @functools.wraps(_criar_os_orig)
+        def _criar_os_logged(*a, **kw):
+            result = _criar_os_orig(*a, **kw)
+            os_id = result.get('id') if isinstance(result, dict) else result
+            _log_os('CRIAR', os_id, {
+                'descricao': kw.get('descricao') or (a[1] if len(a) > 1 else None),
+                'tipo_os': kw.get('tipo_os'),
+                'prioridade': kw.get('prioridade'),
+            })
+            return result
+        globals()['criar_os'] = _criar_os_logged
+
+    _atualizar_os_orig = globals().get('atualizar_os')
+    if callable(_atualizar_os_orig):
+        @functools.wraps(_atualizar_os_orig)
+        def _atualizar_os_logged(*a, **kw):
+            os_id = kw.get('os_id') or (a[0] if a else None)
+            # captura status antes
+            status_antes = None
+            try:
+                cur = _cursor()
+                cur.execute("SELECT status FROM ordens_servico WHERE id = ?", (os_id,))
+                row = cur.fetchone()
+                status_antes = dict(row).get('status') if row else None
+            except Exception:
+                pass
+            result = _atualizar_os_orig(*a, **kw)
+            novo_status = kw.get('status') or status_antes
+            acao = 'ENCERRAR' if (str(novo_status or '').upper() == 'ENCERRADA' and status_antes != 'ENCERRADA') else 'ATUALIZAR'
+            _log_os(acao, os_id, {
+                'status_anterior': status_antes,
+                'status_novo': novo_status,
+                'justificativa_encerramento': kw.get('justificativa_encerramento'),
+            })
+            return result
+        globals()['atualizar_os'] = _atualizar_os_logged
+
+    _excluir_os_orig = globals().get('excluir_os')
+    if callable(_excluir_os_orig):
+        @functools.wraps(_excluir_os_orig)
+        def _excluir_os_logged(*a, **kw):
+            os_id = kw.get('os_id') or (a[0] if a else None)
+            detalhes = {}
+            try:
+                cur = _cursor()
+                cur.execute("SELECT numero, descricao FROM ordens_servico WHERE id = ?", (os_id,))
+                row = cur.fetchone()
+                if row:
+                    r = dict(row)
+                    detalhes = {'numero_os': r.get('numero'), 'descricao': r.get('descricao')}
+            except Exception:
+                pass
+            result = _excluir_os_orig(*a, **kw)
+            try:
+                registrar_log_acao('EXCLUIR', 'OS', os_id, detalhes)
+            except Exception:
+                pass
+            return result
+        globals()['excluir_os'] = _excluir_os_logged
+
+    # ── EQUIPE ───────────────────────────────────────────────────────────────
+    _criar_equipe_orig = globals().get('criar_equipe')
+    if callable(_criar_equipe_orig):
+        @functools.wraps(_criar_equipe_orig)
+        def _criar_equipe_logged(*a, **kw):
+            result = _criar_equipe_orig(*a, **kw)
+            equipe_id = result.get('id') if isinstance(result, dict) else result
+            nome = kw.get('nome') or (a[0] if a else None)
+            try:
+                registrar_log_acao('CRIAR', 'EQUIPE', equipe_id, {'nome': nome})
+            except Exception:
+                pass
+            return result
+        globals()['criar_equipe'] = _criar_equipe_logged
+
+    _atualizar_equipe_orig = globals().get('atualizar_equipe')
+    if callable(_atualizar_equipe_orig):
+        @functools.wraps(_atualizar_equipe_orig)
+        def _atualizar_equipe_logged(*a, **kw):
+            equipe_id = kw.get('equipe_id') or (a[0] if a else None)
+            result = _atualizar_equipe_orig(*a, **kw)
+            nome = kw.get('nome') or (a[1] if len(a) > 1 else None)
+            try:
+                registrar_log_acao('ATUALIZAR', 'EQUIPE', equipe_id, {'nome': nome})
+            except Exception:
+                pass
+            return result
+        globals()['atualizar_equipe'] = _atualizar_equipe_logged
+
+    _excluir_equipe_orig = globals().get('excluir_equipe')
+    if callable(_excluir_equipe_orig):
+        @functools.wraps(_excluir_equipe_orig)
+        def _excluir_equipe_logged(*a, **kw):
+            equipe_id = kw.get('equipe_id') or (a[0] if a else None)
+            _log_equipe('EXCLUIR', equipe_id)
+            result = _excluir_equipe_orig(*a, **kw)
+            return result
+        globals()['excluir_equipe'] = _excluir_equipe_logged
+
+    # ── FUNCIONÁRIO ──────────────────────────────────────────────────────────
+    _criar_funcionario_orig = globals().get('criar_funcionario')
+    if callable(_criar_funcionario_orig):
+        @functools.wraps(_criar_funcionario_orig)
+        def _criar_funcionario_logged(*a, **kw):
+            result = _criar_funcionario_orig(*a, **kw)
+            func_id = result.get('id') if isinstance(result, dict) else result
+            nome = kw.get('nome') or (a[0] if a else None)
+            matricula = kw.get('matricula') or (a[1] if len(a) > 1 else None)
+            try:
+                registrar_log_acao('CRIAR', 'FUNCIONARIO', func_id,
+                    {'nome': nome, 'matricula': matricula})
+            except Exception:
+                pass
+            return result
+        globals()['criar_funcionario'] = _criar_funcionario_logged
+
+    _atualizar_funcionario_orig = globals().get('atualizar_funcionario')
+    if callable(_atualizar_funcionario_orig):
+        @functools.wraps(_atualizar_funcionario_orig)
+        def _atualizar_funcionario_logged(*a, **kw):
+            func_id = kw.get('funcionario_id') or (a[0] if a else None)
+            result = _atualizar_funcionario_orig(*a, **kw)
+            nome = kw.get('nome') or (a[1] if len(a) > 1 else None)
+            try:
+                registrar_log_acao('ATUALIZAR', 'FUNCIONARIO', func_id,
+                    {'nome': nome, 'matricula': kw.get('matricula')})
+            except Exception:
+                pass
+            return result
+        globals()['atualizar_funcionario'] = _atualizar_funcionario_logged
+
+    _excluir_funcionario_orig = globals().get('excluir_funcionario')
+    if callable(_excluir_funcionario_orig):
+        @functools.wraps(_excluir_funcionario_orig)
+        def _excluir_funcionario_logged(*a, **kw):
+            func_id = kw.get('funcionario_id') or (a[0] if a else None)
+            _log_funcionario('EXCLUIR', func_id)  # captura antes de excluir
+            result = _excluir_funcionario_orig(*a, **kw)
+            return result
+        globals()['excluir_funcionario'] = _excluir_funcionario_logged
+
+    # ── APONTAMENTOS / ATIVIDADES / MATERIAIS ── (mantém detalhes básicos) ──
+    for fn, acao, ent, id_kw in [
+        ('criar_os_atividade',   'CRIAR',    'OS_ATIVIDADE',   None),
+        ('atualizar_os_atividade','ATUALIZAR','OS_ATIVIDADE',  'atividade_id'),
+        ('excluir_os_atividade', 'EXCLUIR',  'OS_ATIVIDADE',   'atividade_id'),
+        ('criar_os_apontamento', 'CRIAR',    'OS_APONTAMENTO', None),
+        ('atualizar_os_apontamento','ATUALIZAR','OS_APONTAMENTO','apontamento_id'),
+        ('excluir_os_apontamento','EXCLUIR', 'OS_APONTAMENTO', 'apontamento_id'),
+        ('criar_os_material',    'CRIAR',    'OS_MATERIAL',    None),
+        ('excluir_os_material',  'EXCLUIR',  'OS_MATERIAL',    'material_id'),
+        ('criar_escala',         'CRIAR',    'ESCALA',         None),
+        ('atualizar_escala',     'ATUALIZAR','ESCALA',         'escala_id'),
+        ('excluir_escala',       'EXCLUIR',  'ESCALA',         'escala_id'),
+    ]:
+        orig = globals().get(fn)
+        if not callable(orig):
+            continue
+        def _make_wrapper(orig_fn, _acao, _ent, _id_kw):
+            @functools.wraps(orig_fn)
+            def _w(*a, **kw):
+                result = orig_fn(*a, **kw)
+                try:
+                    reg_id = None
+                    if _id_kw:
+                        reg_id = kw.get(_id_kw) or (a[0] if a else None)
+                    elif isinstance(result, dict):
+                        reg_id = result.get('id')
+                    registrar_log_acao(_acao, _ent, reg_id, {
+                        'os_id': kw.get('os_id') or (a[0] if a else None),
+                    })
+                except Exception:
+                    pass
+                return result
+            return _w
+        globals()[fn] = _make_wrapper(orig, acao, ent, id_kw)
+
+
+# Executa o patch de logs enriquecidos na inicialização do módulo
+try:
+    _patch_log_rico()
+except Exception as _e:
+    print(f'[WARN] _patch_log_rico falhou: {_e}')
+
+# ===== FIM DO PATCH v2 ======================================================
+
+
+# ===== MIGRAÇÃO v2: SUPORTE A PERFIS ADMIN / GERENCIA / TECNICO =============
+# Atualiza a coluna nivel_acesso para aceitar os novos perfis.
+# Totalmente seguro: não apaga dados existentes.
+
+def _migrar_perfis_v2():
+    """
+    1. Converte perfis legados: COMPLETO → GESTOR, VISUALIZACAO/TECNICO → EXECUTOR.
+    2. Eleva o usuário 'admin' para ADMIN.
+    3. Não pode travar a inicialização do app.
+    Roda em cada start — idempotente.
+    """
+    local_conn = None
+    local_cur = None
+    try:
+        print('[DB][startup] _migrar_perfis_v2...', flush=True)
+        local_conn = get_connection()
+        local_cur = local_conn.cursor()
+
+        try:
+            local_cur.execute("SET statement_timeout = '5000'")
+        except Exception:
+            pass
+
+        try:
+            local_cur.execute("SET lock_timeout = '3000'")
+        except Exception:
+            pass
+
+        local_cur.execute(
+            "UPDATE usuarios SET nivel_acesso = 'GESTOR', updated_at = CURRENT_TIMESTAMP "
+            "WHERE UPPER(COALESCE(nivel_acesso,'')) = 'COMPLETO'"
+        )
+
+        local_cur.execute(
+            "UPDATE usuarios SET nivel_acesso = 'EXECUTOR', updated_at = CURRENT_TIMESTAMP "
+            "WHERE UPPER(COALESCE(nivel_acesso,'')) IN ('VISUALIZACAO','TECNICO')"
+        )
+
+        try:
+            local_cur.execute(
+                "UPDATE usuarios SET nivel_acesso = 'ADMIN', updated_at = CURRENT_TIMESTAMP "
+                "WHERE LOWER(COALESCE(username,'')) = 'admin'"
+            )
+        except Exception as exc:
+            print(f'[DB][startup] aviso ao promover admin em _migrar_perfis_v2: {exc}', flush=True)
+
+        try:
+            local_conn.commit()
+        except Exception:
+            pass
+
+        print('[DB][startup] _migrar_perfis_v2 ok', flush=True)
+    except Exception as exc:
+        try:
+            if local_conn:
+                local_conn.rollback()
+        except Exception:
+            pass
+        print(f'[DB][startup] _migrar_perfis_v2 ignorada: {exc}', flush=True)
+    finally:
+        try:
+            if local_cur:
+                local_cur.close()
+        except Exception:
+            pass
+
+
+try:
+    _migrar_perfis_v2()
+except Exception as _me2:
+    print(f'[DB][startup] falha em _migrar_perfis_v2: {_me2}', flush=True)
+
+# ===== FIM DA MIGRAÇÃO v2 ====================================================
+
+
+# ===== PATCH: criar / renomear / excluir perfil personalizável ==============
+
+def criar_perfil_acesso(nome: str, descricao: str = '') -> dict:
+    """Cria um novo perfil (linha em perfis_acesso + linhas zeradas em perfil_permissoes)."""
+    nome = str(nome or '').strip().upper()
+    if not nome:
+        raise ValueError('Informe o nome do perfil.')
+    cur = _cursor()
+    cur.execute('SELECT nome FROM perfis_acesso WHERE UPPER(nome) = ?', (nome,))
+    if cur.fetchone():
+        raise ValueError(f'Já existe um perfil com o nome "{nome}".')
+    cur.execute(
+        'INSERT INTO perfis_acesso (nome, descricao, ativo, created_at, updated_at) VALUES (?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)',
+        (nome, str(descricao or '').strip()),
+    )
+    zero = {k: 0 for k in CAMPOS_PERMISSAO_SISTEMA}
+    for modulo in MODULOS_SISTEMA:
+        cur.execute(
+            f"INSERT OR IGNORE INTO perfil_permissoes (id, perfil_nome, modulo, {', '.join(CAMPOS_PERMISSAO_SISTEMA)}, created_at, updated_at) VALUES (?, ?, ?, {', '.join(['?']*len(CAMPOS_PERMISSAO_SISTEMA))}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            (str(uuid.uuid4()), nome, modulo, *[0]*len(CAMPOS_PERMISSAO_SISTEMA)),
+        )
+    conn.commit()
+    try:
+        registrar_log_acao('CRIAR', 'PERFIL', None, {'nome': nome, 'descricao': descricao})
+    except Exception:
+        pass
+    return {'nome': nome}
+
+
+def renomear_perfil_acesso(nome_atual: str, nome_novo: str, descricao: str = '') -> dict:
+    """Renomeia um perfil customizado e atualiza todas as referências."""
+    nome_atual = str(nome_atual or '').strip().upper()
+    nome_novo  = str(nome_novo or '').strip().upper()
+    if nome_atual in ('ADMIN',):
+        raise ValueError('O perfil ADMIN não pode ser renomeado.')
+    if not nome_novo:
+        raise ValueError('Informe o novo nome do perfil.')
+    cur = _cursor()
+    if nome_atual != nome_novo:
+        cur.execute('SELECT nome FROM perfis_acesso WHERE UPPER(nome) = ?', (nome_novo,))
+        if cur.fetchone():
+            raise ValueError(f'Já existe um perfil com o nome "{nome_novo}".')
+        cur.execute('UPDATE perfil_permissoes SET perfil_nome = ? WHERE UPPER(perfil_nome) = ?', (nome_novo, nome_atual))
+        cur.execute('UPDATE usuarios SET nivel_acesso = ? WHERE UPPER(nivel_acesso) = ?', (nome_novo, nome_atual))
+    cur.execute('UPDATE perfis_acesso SET nome = ?, descricao = ?, updated_at = CURRENT_TIMESTAMP WHERE UPPER(nome) = ?',
+                (nome_novo, str(descricao or '').strip(), nome_atual))
+    conn.commit()
+    try:
+        registrar_log_acao('ATUALIZAR', 'PERFIL', None, {'nome_antigo': nome_atual, 'nome_novo': nome_novo})
+    except Exception:
+        pass
+    return {'nome': nome_novo}
+
+
+def excluir_perfil_acesso(nome: str) -> None:
+    """Exclui um perfil customizado. Bloqueia se houver usuários vinculados."""
+    nome = str(nome or '').strip().upper()
+    if nome in PERFIS_ACESSO_PADRAO:
+        raise ValueError(f'O perfil "{nome}" é padrão do sistema e não pode ser excluído.')
+    cur = _cursor()
+    cur.execute('SELECT COUNT(*) AS c FROM usuarios WHERE UPPER(nivel_acesso) = ?', (nome,))
+    row = cur.fetchone()
+    cnt = dict(row).get('c', 0) if row else 0
+    if cnt:
+        raise ValueError(f'O perfil "{nome}" está em uso por {cnt} usuário(s). Remova-os antes de excluir.')
+    cur.execute('DELETE FROM perfil_permissoes WHERE UPPER(perfil_nome) = ?', (nome,))
+    cur.execute('DELETE FROM perfis_acesso WHERE UPPER(nome) = ?', (nome,))
+    conn.commit()
+    try:
+        registrar_log_acao('EXCLUIR', 'PERFIL', None, {'nome': nome})
+    except Exception:
+        pass
+
+
+def salvar_permissoes_perfil_completo(perfil_nome: str, modulos_payload: dict) -> None:
+    """
+    Salva todas as permissões de um perfil de uma vez.
+    modulos_payload: { 'HOME': {'ver_menu': True, ...}, 'OS': {...}, ... }
+    """
+    perfil_nome_upper = str(perfil_nome or '').strip().upper()
+    if perfil_nome_upper == 'ADMIN':
+        raise ValueError('O perfil ADMIN é fixo e não pode ser alterado.')
+    cur = _cursor()
+    for modulo, perms in modulos_payload.items():
+        modulo = str(modulo or '').strip().upper()
+        if modulo not in MODULOS_SISTEMA:
+            continue
+        payload = {campo: 1 if bool((perms or {}).get(campo)) else 0 for campo in CAMPOS_PERMISSAO_SISTEMA}
+        cur.execute(
+            f"UPDATE perfil_permissoes SET {', '.join([f'{c} = ?' for c in CAMPOS_PERMISSAO_SISTEMA])}, updated_at = CURRENT_TIMESTAMP WHERE UPPER(perfil_nome) = ? AND modulo = ?",
+            (*[payload[c] for c in CAMPOS_PERMISSAO_SISTEMA], perfil_nome_upper, modulo),
+        )
+    conn.commit()
+    try:
+        registrar_log_acao('ATUALIZAR', 'PERFIL', None, {
+            'tipo': 'PERMISSOES_COMPLETO',
+            'perfil_nome': perfil_nome_upper,
+            'modulos': list(modulos_payload.keys()),
+        })
+    except Exception:
+        pass
+
+# ===== FIM DO PATCH ==========================================================
+
+
+def close_connection(conn_to_close=None):
+    target = conn_to_close
+    if target is None:
+        target = globals().get('conn')
+    try:
+        if target:
+            target.close()
+    except Exception as e:
+        print(f'[DB] erro ao fechar conexão: {e}', flush=True)

@@ -1,42 +1,191 @@
 from nicegui import ui, app
 from services import db
 
+PERFIS = ('ADMIN', 'GESTOR', 'PLANEJADOR', 'EXECUTOR', 'VISUALIZACAO')
+
+_MAP = {
+    'COMPLETO': 'GESTOR',
+    'GERENCIA': 'GESTOR',
+    'TECNICO': 'EXECUTOR',
+}
+
+_MODULE_BY_ROUTE = {
+    '/home': 'HOME',
+    '/arvore': 'ARVORE',
+    '/equipamentos': 'EQUIPAMENTOS',
+    '/ativos': 'EQUIPAMENTOS',
+    '/os': 'OS',
+    '/equipes': 'EQUIPES',
+    '/funcionarios': 'FUNCIONARIOS',
+    '/usuarios': 'USUARIOS',
+    '/dashboard': 'DASHBOARD',
+    '/logs': 'LOGS',
+}
+
+
+def _normalize_role(role: str) -> str:
+    r = str(role or 'VISUALIZACAO').upper().strip()
+    r = _MAP.get(r, r)
+    return r if r in PERFIS else 'VISUALIZACAO'
+
 
 def validate_user(username: str, password: str):
     return db.autenticar_usuario(username, password)
 
 
+def _load_permissions_snapshot(role: str) -> dict:
+    try:
+        return db.obter_mapa_permissoes_perfil(role)
+    except Exception:
+        return {}
+
+
 def save_session(username: str, user_data: dict):
+    raw_role = str(user_data.get('nivel_acesso', 'VISUALIZACAO') or 'VISUALIZACAO').upper()
+    if str(username or '').strip().lower() == 'admin':
+        raw_role = 'ADMIN'
+    role = _normalize_role(raw_role)
+
     app.storage.user['authenticated'] = True
     app.storage.user['username'] = str(user_data.get('username', username) or username).upper()
-    app.storage.user['name'] = user_data.get('nome_funcionario') or str(user_data.get('username', username) or username).upper()
-    app.storage.user['role'] = str(user_data.get('nivel_acesso', 'VISUALIZACAO') or 'VISUALIZACAO').upper()
+    app.storage.user['name'] = (
+        user_data.get('nome_exibicao')
+        or user_data.get('nome_funcionario')
+        or user_data.get('nome')
+        or str(user_data.get('username', username) or username).upper()
+    )
+    app.storage.user['role'] = role
     app.storage.user['usuario_id'] = user_data.get('id')
     app.storage.user['funcionario_id'] = user_data.get('funcionario_id')
     app.storage.user['must_change_password'] = bool(user_data.get('deve_trocar_senha', 0))
+    app.storage.user['can_view_logs'] = bool(user_data.get('pode_ver_logs', 0))
+    app.storage.user['email'] = user_data.get('email')
+    app.storage.user['permissions'] = _load_permissions_snapshot(role)
 
 
-def require_auth():
+def require_auth() -> bool:
     return bool(app.storage.user.get('authenticated', False))
 
 
-def needs_password_change():
+def needs_password_change() -> bool:
     return bool(app.storage.user.get('must_change_password', False))
 
 
+def get_role() -> str:
+    raw = str(app.storage.user.get('role', 'VISUALIZACAO') or 'VISUALIZACAO').upper()
+    return _normalize_role(raw)
+
+
+def refresh_permissions() -> dict:
+    perms = _load_permissions_snapshot(get_role())
+    app.storage.user['permissions'] = perms
+    return perms
+
+
+def _permissions_snapshot() -> dict:
+    perms = app.storage.user.get('permissions') or {}
+    if not perms:
+        perms = refresh_permissions()
+    return perms or {}
+
+
+def _normalize_module(module_or_route: str) -> str:
+    raw = str(module_or_route or '').strip()
+    if not raw:
+        return ''
+    if raw.startswith('/'):
+        return _MODULE_BY_ROUTE.get(raw, raw.strip('/').upper())
+    return raw.upper()
+
+
+def has_permission(module_or_route: str, action: str) -> bool:
+    module = _normalize_module(module_or_route)
+    action = str(action or '').strip().lower()
+    if not module or not action:
+        return False
+    if is_admin():
+        return True
+    perms = _permissions_snapshot()
+    module_perms = perms.get(module) or {}
+    return bool(module_perms.get(action, False))
+
+
+def is_admin() -> bool:
+    return get_role() == 'ADMIN'
+
+
+def is_read_only(module_or_route: str = None) -> bool:
+    if not module_or_route:
+        return get_role() == 'VISUALIZACAO'
+    return not (
+        has_permission(module_or_route, 'criar')
+        or has_permission(module_or_route, 'editar')
+        or has_permission(module_or_route, 'excluir')
+        or has_permission(module_or_route, 'aprovar_liberar')
+        or has_permission(module_or_route, 'gerenciar_usuarios')
+        or has_permission(module_or_route, 'gerenciar_permissoes')
+    )
+
+
 def get_access_level() -> str:
-    return str(app.storage.user.get('role', 'VISUALIZACAO') or 'VISUALIZACAO').upper()
+    return get_role()
 
 
-def is_read_only() -> bool:
-    return get_access_level() == 'VISUALIZACAO'
+def can_access_route(route: str) -> bool:
+    return has_permission(route, 'abrir_tela')
 
 
-def can_edit() -> bool:
-    return not is_read_only()
+def can_view_menu(route: str) -> bool:
+    return has_permission(route, 'ver_menu')
+
+
+def can_edit(module_or_route: str = None) -> bool:
+    if not module_or_route:
+        return get_role() in ('ADMIN', 'GESTOR', 'PLANEJADOR', 'EXECUTOR')
+    return has_permission(module_or_route, 'criar') or has_permission(module_or_route, 'editar')
+
+
+def can_create(module_or_route: str) -> bool:
+    return has_permission(module_or_route, 'criar')
+
+
+def can_update(module_or_route: str) -> bool:
+    return has_permission(module_or_route, 'editar')
+
+
+def can_delete(module_or_route: str = None) -> bool:
+    return has_permission(module_or_route or '/home', 'excluir')
+
+
+def can_export(module_or_route: str) -> bool:
+    return has_permission(module_or_route, 'exportar')
+
+
+def can_close_os() -> bool:
+    return has_permission('/os', 'aprovar_liberar')
+
+
+def can_manage_users() -> bool:
+    return has_permission('/usuarios', 'gerenciar_usuarios')
+
+
+def can_manage_permissions() -> bool:
+    return has_permission('/usuarios', 'gerenciar_permissoes')
+
+
+def can_view_logs() -> bool:
+    return has_permission('/logs', 'abrir_tela') or bool(app.storage.user.get('can_view_logs', False))
+
+
+def allowed_menu_routes() -> set:
+    return {route for route in _MODULE_BY_ROUTE.keys() if can_view_menu(route)}
 
 
 def logout():
+    try:
+        db.registrar_logout_usuario(app.storage.user.get('usuario_id'))
+    except Exception:
+        pass
     app.storage.user.clear()
     ui.navigate.to('/')
 
@@ -74,17 +223,10 @@ def _styles():
         .nice-field { width:100%; margin-bottom:14px; }
         .nice-field .q-field__control { min-height:58px !important; border-radius:18px !important; background:var(--field-bg) !important; border:1px solid var(--field-border) !important; }
         .nice-field .q-field__native, .nice-field input { color:var(--field-text) !important; font-size:15px !important; font-weight:600 !important; caret-color:var(--field-caret) !important; }
-        .nice-field .q-field__native::selection, .nice-field input::selection { background: transparent !important; color: var(--field-text) !important; }
-        .nice-field input:-webkit-autofill,
-        .nice-field input:-webkit-autofill:hover,
-        .nice-field input:-webkit-autofill:focus,
-        .nice-field input:-webkit-autofill:active {
-            -webkit-text-fill-color: var(--field-text) !important;
-            caret-color: var(--field-caret) !important;
-            -webkit-box-shadow: 0 0 0 1000px var(--field-bg) inset !important;
-            box-shadow: 0 0 0 1000px var(--field-bg) inset !important;
-            border-radius: 18px !important;
-            transition: background-color 999999s ease-in-out 0s !important;
+        .nice-field input:-webkit-autofill, .nice-field input:-webkit-autofill:hover, .nice-field input:-webkit-autofill:focus, .nice-field input:-webkit-autofill:active {
+            -webkit-text-fill-color: var(--field-text) !important; caret-color: var(--field-caret) !important;
+            -webkit-box-shadow: 0 0 0 1000px var(--field-bg) inset !important; box-shadow: 0 0 0 1000px var(--field-bg) inset !important;
+            border-radius: 18px !important; transition: background-color 999999s ease-in-out 0s !important;
         }
         .nice-field .q-field__control:before, .nice-field .q-field__control:after { display:none !important; }
         .error-box { width:100%; box-sizing:border-box; border-radius:14px; padding:10px 12px; text-align:center; font-size:13px; font-weight:800; color:var(--error-text); background:var(--error-bg); border:1px solid var(--error-border); }
@@ -120,6 +262,10 @@ def build_login_page():
                     show_error(msg)
                     return
                 save_session(username.value, user)
+                try:
+                    db.registrar_login_usuario(user.get('id'))
+                except Exception:
+                    pass
                 if bool(user.get('deve_trocar_senha', 0)):
                     ui.navigate.to('/trocar-senha')
                 else:
@@ -132,14 +278,14 @@ def build_login_page():
             password.on('keydown.enter', lambda e: login())
 
 
-def build_change_password_page():
+def _render_password_form(title: str, subtitle: str, on_save, success_redirect: str = '/home'):
     _styles()
     with ui.element('div').classes('login-root'):
         with ui.element('div').classes('login-panel'):
             with ui.element('div').classes('brand-box'):
                 ui.image('/assets/logo_app.png').classes('brand-logo')
-                ui.label('TROCAR SENHA').classes('brand-title')
-            ui.label('Primeiro acesso').classes('subtitle-box')
+                ui.label(title).classes('brand-title')
+            ui.label(subtitle).classes('subtitle-box')
             nova = ui.input(placeholder='Nova senha', password=True, password_toggle_button=True).classes('w-full nice-field').props('outlined autocomplete=off autocorrect=off autocapitalize=off spellcheck=false')
             conf = ui.input(placeholder='Confirmar senha', password=True, password_toggle_button=True).classes('w-full nice-field').props('outlined autocomplete=off autocorrect=off autocapitalize=off spellcheck=false')
             error_container = ui.column().classes('w-full')
@@ -153,23 +299,44 @@ def build_change_password_page():
                 senha1 = str(nova.value or '').strip()
                 senha2 = str(conf.value or '').strip()
                 if len(senha1) < 4:
-                    show_error('Informe uma senha válida.')
+                    show_error('Informe uma senha com pelo menos 4 caracteres.')
                     return
                 if senha1 != senha2:
                     show_error('As senhas não conferem.')
                     return
-                usuario_id = app.storage.user.get('usuario_id')
-                if not usuario_id:
-                    show_error('Sessão inválida. Faça login novamente.')
-                    return
                 try:
-                    db.alterar_senha_usuario(usuario_id, senha1, False)
-                    app.storage.user['must_change_password'] = False
+                    on_save(senha1)
                     ui.notify('Senha alterada com sucesso.', type='positive')
-                    ui.navigate.to('/home')
+                    ui.navigate.to(success_redirect)
                 except Exception as ex:
                     show_error(str(ex))
 
             ui.button('SALVAR', on_click=salvar).classes('login-button')
             nova.on('keydown.enter', lambda e: conf.run_method('focus'))
             conf.on('keydown.enter', lambda e: salvar())
+
+
+def build_change_password_page():
+    if not require_auth():
+        ui.navigate.to('/')
+        return
+
+    def on_save(nova_senha: str):
+        usuario_id = app.storage.user.get('usuario_id')
+        if not usuario_id:
+            raise ValueError('Sessão inválida.')
+        db.alterar_senha_usuario(usuario_id, nova_senha, False)
+        app.storage.user['must_change_password'] = False
+
+    _render_password_form('ALTERAR SENHA', 'Defina uma nova senha para continuar.', on_save, '/home')
+
+
+def build_reset_password_page(token: str = ''):
+    token = str(token or '').strip()
+
+    def on_save(nova_senha: str):
+        if not token:
+            raise ValueError('Token de redefinição inválido.')
+        db.consumir_token_redefinicao(token, nova_senha)
+
+    _render_password_form('DEFINIR SENHA', 'Crie sua nova senha para acessar o sistema.', on_save, '/')

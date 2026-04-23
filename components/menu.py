@@ -12,9 +12,19 @@ def _set_sidebar_aberta(valor: bool) -> None:
     app.storage.user[SIDEBAR_OPEN_KEY] = bool(valor)
 
 
-def _is_read_only() -> bool:
-    role = str(app.storage.user.get('role', 'VISUALIZACAO') or 'VISUALIZACAO').upper()
-    return role == 'VISUALIZACAO'
+def _get_role() -> str:
+    from auth import get_role
+    return get_role()
+
+
+def _can_view_logs() -> bool:
+    from auth import can_view_logs
+    return can_view_logs()
+
+
+def _allowed_routes() -> set:
+    from auth import allowed_menu_routes
+    return allowed_menu_routes()
 
 
 def ensure_page_loader():
@@ -93,6 +103,7 @@ def ensure_page_loader():
 
     app.storage.user[LOADER_BOOT_KEY] = True
 
+
 def show_page_loader(texto: str = 'CARREGANDO...'):
     ensure_page_loader()
     try:
@@ -112,27 +123,46 @@ def hide_page_loader():
 def loader_props(texto: str = 'CARREGANDO...') -> str:
     texto_js = str(texto or 'CARREGANDO...').replace('\\', '\\\\').replace("'", "\\'")
     return (
-        f'onmousedown="window.fslShowPageLoader(\'{texto_js}\')" ' 
-        f'ontouchstart="window.fslShowPageLoader(\'{texto_js}\')" ' 
+        f'onmousedown="window.fslShowPageLoader(\'{texto_js}\')" '
+        f'ontouchstart="window.fslShowPageLoader(\'{texto_js}\')" '
         f'onclick="window.fslShowPageLoader(\'{texto_js}\')"'
     )
+
+
+# ── rótulo amigável do perfil ────────────────────────────────────────────────
+_ROLE_LABEL = {
+    'ADMIN': 'ADMINISTRADOR',
+    'GESTOR': 'GESTOR',
+    'PLANEJADOR': 'PLANEJADOR',
+    'EXECUTOR': 'EXECUTOR',
+    'VISUALIZACAO': 'VISUALIZAÇÃO',
+}
+
 
 def build_menu(current_route: str | None = None):
     ensure_page_loader()
 
-    itens = [
-        ('home', 'Home', '/home'),
-        ('account_tree', 'Árvore de Equipamentos', '/arvore'),
-        ('precision_manufacturing', 'Equipamentos', '/equipamentos'),
-        ('assignment', 'OS', '/os'),
-        ('groups', 'Equipes', '/equipes'),
-        ('badge', 'Funcionários', '/funcionarios'),
-        ('manage_accounts', 'Usuários', '/usuarios'),
-        ('bar_chart', 'Dashboard', '/dashboard'),
+    role = _get_role()
+    allowed = _allowed_routes()
+
+    # Todos os itens possíveis — filtrados por perfil
+    todos_itens = [
+        ('home',                   'Home',                    '/home'),
+        ('account_tree',           'Árvore de Equipamentos',  '/arvore'),
+        ('precision_manufacturing','Equipamentos',             '/equipamentos'),
+        ('assignment',             'OS',                      '/os'),
+        ('groups',                 'Equipes',                 '/equipes'),
+        ('badge',                  'Funcionários',            '/funcionarios'),
+        ('manage_accounts',        'Usuários',                '/usuarios'),
+        ('bar_chart',              'Dashboard',               '/dashboard'),
     ]
+    if _can_view_logs():
+        todos_itens.append(('history', 'Log de Ações', '/logs'))
+
+    itens = [(ic, tt, rt) for ic, tt, rt in todos_itens if rt in allowed]
 
     nome_usuario = str(app.storage.user.get('name', 'USUÁRIO') or 'USUÁRIO').upper()
-    modo_usuario = 'VISUALIZAÇÃO' if _is_read_only() else 'COMPLETO'
+    modo_label = _ROLE_LABEL.get(role, role)
 
     sidebar = ui.column().classes(
         'h-full bg-slate-800 text-white p-3 gap-2 shrink-0 shadow-lg transition-all duration-300'
@@ -145,7 +175,7 @@ def build_menu(current_route: str | None = None):
         else:
             ui.notify(f'{titulo} em breve', type='warning')
 
-    def logout():
+    def do_logout():
         from auth import logout as auth_logout
         auth_logout()
 
@@ -166,6 +196,16 @@ def build_menu(current_route: str | None = None):
     def classes_botao_logout() -> str:
         return 'w-full justify-start rounded-xl px-3 py-3 hover:bg-red-500/20 text-red-300'
 
+    # cor do badge de perfil
+    _ROLE_COLOR = {
+        'ADMIN': 'text-red-300',
+        'GESTOR': 'text-amber-300',
+        'PLANEJADOR': 'text-emerald-300',
+        'EXECUTOR': 'text-sky-300',
+        'VISUALIZACAO': 'text-slate-300',
+    }
+    badge_color = _ROLE_COLOR.get(role, 'text-amber-300')
+
     def render_menu():
         sidebar.style(estilo_largura())
         sidebar.clear()
@@ -182,7 +222,7 @@ def build_menu(current_route: str | None = None):
             if aberta:
                 with ui.card().classes('w-full shadow-none border border-white/10 bg-white/5 rounded-xl p-3 gap-1 mb-2'):
                     ui.label(nome_usuario).classes('text-sm font-bold text-white')
-                    ui.label(f'MODO: {modo_usuario}').classes('text-[11px] text-amber-300 font-medium')
+                    ui.label(f'PERFIL: {modo_label}').classes(f'text-[11px] {badge_color} font-medium')
                 ui.label('Painel principal').classes('text-xs text-slate-400 mb-1')
 
             for icone, titulo, rota in itens:
@@ -194,7 +234,7 @@ def build_menu(current_route: str | None = None):
                             ui.label(titulo).classes('ml-3 text-sm truncate')
 
             ui.separator().classes('my-2 bg-white/10')
-            with ui.button(on_click=logout).props('flat no-caps align=left').classes(classes_botao_logout()):
+            with ui.button(on_click=do_logout).props('flat no-caps align=left').classes(classes_botao_logout()):
                 with ui.row().classes('items-center w-full no-wrap'):
                     ui.icon('logout').classes('text-[20px]')
                     if aberta:
