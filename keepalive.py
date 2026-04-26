@@ -304,10 +304,6 @@ def _build_dashboard():
                 txt  = "✅ Mensagem enviada!" if ok else "❌ Falhou — verifique TOKEN/CHAT_ID"
                 ui.notify(txt, type=tipo)
                 log_el.set_content(_render_log())
-                # dispara notificação local também
-                ui.run_javascript(
-                    f"kaNotify('Keep-Alive', '{txt}')"
-                )
 
             ui.button("📨 Testar Telegram", on_click=test_tg).classes("ka-btn ka-btn-outline")
 
