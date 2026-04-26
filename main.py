@@ -18,6 +18,7 @@ from pages.usuarios import usuarios_page
 from pages.dashboard import dashboard_page
 from pages.logs import logs_page
 from services.db import close_connection, get_anexo, get_connection
+from keepalive import setup_keepalive                          # ← ADICIONADO
 
 
 Path('assets').mkdir(parents=True, exist_ok=True)
@@ -54,8 +55,6 @@ def baixar_arquivo(anexo_id: str, nome: str):
     return FileResponse(path=str(caminho), filename=filename, media_type='application/octet-stream', content_disposition_type='attachment')
 
 
-
-
 @app.on_shutdown
 def _close_db_on_shutdown():
     try:
@@ -63,6 +62,7 @@ def _close_db_on_shutdown():
         print('🛑 conexão com banco encerrada.', flush=True)
     except Exception as e:
         print(f'⚠️ falha ao encerrar conexão do banco: {e}', flush=True)
+
 
 @app.get('/ping')
 def ping():
@@ -101,6 +101,7 @@ def change_password_page():
         ui.navigate.to('/')
         return
     build_change_password_page()
+
 
 @ui.page('/definir-senha')
 def reset_password_page(token: str = ''):
@@ -161,6 +162,8 @@ PORT = int(os.environ.get('PORT', 8080))
 HOST = '0.0.0.0'
 
 print(f'🚀 INICIANDO APP EM {HOST}:{PORT}')
+
+setup_keepalive()                                              # ← ADICIONADO
 
 ui.run(
     title='Maintenance APP',
