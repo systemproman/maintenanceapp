@@ -374,7 +374,7 @@ def dashboard_page():
                 'OS SEM APONTAMENTO'
             )
 
-    with ui.row().classes('w-full h-screen no-wrap bg-slate-100'):
+    with ui.row().classes('fsl-app-shell w-full h-screen no-wrap bg-slate-100'):
         build_menu('/dashboard')
         with ui.column().classes('flex-1 h-full p-4 overflow-hidden'):
             render_dashboard()

@@ -432,7 +432,7 @@ def os_page():
     pode_exportar = can_export('/os')
     estado = {'os_id': app.storage.user.get('os_selected_id')}
 
-    with ui.row().classes('w-full h-screen no-wrap bg-slate-100'):
+    with ui.row().classes('fsl-app-shell w-full h-screen no-wrap bg-slate-100'):
         build_menu('/os')
         with ui.column().classes('flex-1 h-full p-4 gap-4 overflow-hidden'):
             with ui.card().classes('w-full rounded-2xl shadow-sm border-0 bg-white p-0 overflow-hidden'):

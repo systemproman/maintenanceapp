@@ -19,7 +19,7 @@ def funcionarios_page():
     editavel = can_edit('/funcionarios')
     pode_criar = can_create('/funcionarios')
     pode_excluir = can_delete('/funcionarios')
-    with ui.row().classes('w-full h-screen no-wrap bg-slate-100'):
+    with ui.row().classes('fsl-app-shell w-full h-screen no-wrap bg-slate-100'):
         build_menu('/funcionarios')
         with ui.column().classes('flex-1 h-full p-4 gap-4 overflow-hidden'):
             with ui.card().classes('w-full rounded-2xl shadow-sm border-0 bg-white p-4'):

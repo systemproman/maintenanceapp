@@ -108,7 +108,7 @@ def build_home_page():
     </style>
     ''')
 
-    with ui.row().classes('w-full h-screen no-wrap bg-slate-100'):
+    with ui.row().classes('fsl-app-shell w-full h-screen no-wrap bg-slate-100'):
         build_menu()
         with ui.element('div').classes('home-main-area'):
             ui.element('div').classes('home-slide home-slide-1')

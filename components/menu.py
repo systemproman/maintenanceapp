@@ -62,6 +62,16 @@ def ensure_page_loader():
         font: 700 13px/1.2 Arial, sans-serif; color: #334155;
         text-transform: uppercase; letter-spacing: .04em; text-align:center;
       }
+      /* ===== CORRECAO GLOBAL DE LAYOUT / PWA / MOBILE ===== */
+      html, body { width: 100% !important; height: 100% !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; overscroll-behavior: none !important; background: #f1f5f9 !important; }
+      body { position: fixed !important; inset: 0 !important; touch-action: manipulation; }
+      #app, .q-layout, .q-page-container, .q-page, .nicegui-content { width: 100vw !important; height: 100dvh !important; max-width: 100vw !important; max-height: 100dvh !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; background: #f1f5f9 !important; }
+      .fsl-app-shell { width: 100vw !important; height: 100dvh !important; min-height: 100dvh !important; max-height: 100dvh !important; overflow: hidden !important; background: #f1f5f9 !important; }
+      .fsl-sidebar { height: 100dvh !important; min-height: 100dvh !important; max-height: 100dvh !important; align-self: stretch !important; overflow-y: auto !important; overflow-x: hidden !important; background: #1e293b !important; -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
+      .fsl-sidebar::-webkit-scrollbar { width: 6px; }
+      .fsl-sidebar::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 999px; }
+      @media (orientation: landscape) and (max-height: 560px) { .fsl-sidebar { padding: 8px !important; } .fsl-sidebar .q-btn { min-height: 38px !important; padding-top: 8px !important; padding-bottom: 8px !important; } .fsl-sidebar .q-card { padding: 8px !important; } }
+      @supports (-webkit-touch-callout: none) { .fsl-app-shell, .fsl-sidebar, #app, .q-layout, .q-page-container, .q-page, .nicegui-content { height: -webkit-fill-available !important; max-height: -webkit-fill-available !important; } }
       body.fsl-busy, body.fsl-busy * { cursor: progress !important; }
       @keyframes fslSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     </style>
@@ -165,7 +175,7 @@ def build_menu(current_route: str | None = None):
     modo_label = _ROLE_LABEL.get(role, role)
 
     sidebar = ui.column().classes(
-        'h-full bg-slate-800 text-white p-3 gap-2 shrink-0 shadow-lg transition-all duration-300'
+        'fsl-sidebar h-full bg-slate-800 text-white p-3 gap-2 shrink-0 shadow-lg transition-all duration-300'
     )
 
     def ir_para(rota, titulo):

@@ -22,7 +22,7 @@ def equipes_page():
         ui.navigate.to('/home')
         return
     editavel = can_edit('/equipes')
-    with ui.row().classes('w-full h-screen no-wrap bg-slate-100'):
+    with ui.row().classes('fsl-app-shell w-full h-screen no-wrap bg-slate-100'):
         build_menu('/equipes')
         with ui.column().classes('flex-1 h-full p-4 gap-4 overflow-hidden'):
             with ui.tabs().classes('w-full') as tabs:
