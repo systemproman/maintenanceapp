@@ -18,7 +18,8 @@ from pages.usuarios import usuarios_page
 from pages.dashboard import dashboard_page
 from pages.logs import logs_page
 from services.db import close_connection, get_anexo, get_connection
-from keepalive import setup_keepalive                          # ← ADICIONADO
+from keepalive import setup_keepalive
+from pwa import inject_pwa_head, setup_global_pwa
 
 
 Path('assets').mkdir(parents=True, exist_ok=True)
@@ -26,6 +27,8 @@ Path('uploads').mkdir(parents=True, exist_ok=True)
 
 app.add_static_files('/assets', 'assets')
 app.add_static_files('/uploads', 'uploads')
+
+setup_global_pwa()
 
 
 def _resolver_anexo(anexo_id: str):
@@ -77,6 +80,7 @@ def ping():
 
 
 def _protect_page(body_fn, route: str = '/home'):
+    inject_pwa_head()
     if not require_auth():
         ui.navigate.to('/')
         return
@@ -92,11 +96,13 @@ def _protect_page(body_fn, route: str = '/home'):
 
 @ui.page('/')
 def login_page():
+    inject_pwa_head()
     build_login_page()
 
 
 @ui.page('/trocar-senha')
 def change_password_page():
+    inject_pwa_head()
     if not require_auth():
         ui.navigate.to('/')
         return
@@ -105,6 +111,7 @@ def change_password_page():
 
 @ui.page('/definir-senha')
 def reset_password_page(token: str = ''):
+    inject_pwa_head()
     build_reset_password_page(token)
 
 
