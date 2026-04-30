@@ -223,7 +223,7 @@ def _styles():
         .subtitle-box { width:100%; text-align:center; font-size:18px; font-weight:800; color:var(--subtitle-color); margin:2px 0 18px 0; }
         .nice-field { width:100%; margin-bottom:14px; }
         .nice-field .q-field__control { min-height:58px !important; border-radius:18px !important; background:var(--field-bg) !important; border:1px solid var(--field-border) !important; }
-        .nice-field .q-field__native, .nice-field input { color:var(--field-text) !important; font-size:15px !important; font-weight:600 !important; caret-color:var(--field-caret) !important; }
+        .nice-field .q-field__native, .nice-field input { color:var(--field-text) !important; font-size:15px !important; font-weight:600 !important; caret-color:var(--field-caret) !important; user-select:text !important; -webkit-user-select:text !important; }
         .nice-field input:-webkit-autofill, .nice-field input:-webkit-autofill:hover, .nice-field input:-webkit-autofill:focus, .nice-field input:-webkit-autofill:active {
             -webkit-text-fill-color: var(--field-text) !important; caret-color: var(--field-caret) !important;
             -webkit-box-shadow: 0 0 0 1000px var(--field-bg) inset !important; box-shadow: 0 0 0 1000px var(--field-bg) inset !important;
@@ -244,8 +244,8 @@ def build_login_page():
                 ui.image('/assets/logo_app.png').classes('brand-logo')
                 ui.label('MAINTENANCE APP').classes('brand-title')
             ui.label('Acesso ao sistema').classes('subtitle-box')
-            username = ui.input(placeholder='Usuário').classes('w-full nice-field').props('outlined autocomplete=off autocorrect=off autocapitalize=off spellcheck=false')
-            password = ui.input(placeholder='Senha', password=True, password_toggle_button=True).classes('w-full nice-field').props('outlined autocomplete=off autocorrect=off autocapitalize=off spellcheck=false')
+            username = ui.input(placeholder='Usuário').classes('w-full nice-field').props('outlined autocomplete=off autocorrect=off autocapitalize=off spellcheck=false unselectable=off')
+            password = ui.input(placeholder='Senha', password=True, password_toggle_button=True).classes('w-full nice-field').props('outlined autocomplete=off autocorrect=off autocapitalize=off spellcheck=false unselectable=off')
             error_container = ui.column().classes('w-full')
 
             def show_error(message: str):

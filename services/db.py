@@ -5111,7 +5111,7 @@ def _enviar_email(destinatario: str, assunto: str, corpo_texto: str) -> bool:
     msg['From'] = f'{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>' if SMTP_FROM_NAME else SMTP_FROM_EMAIL
     msg['To'] = destinatario
     msg.set_content(corpo_texto)
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=5) as server:
         if SMTP_USE_TLS:
             server.starttls()
         if SMTP_USER:
@@ -5947,7 +5947,7 @@ def _enviar_email(destinatario: str, assunto: str, corpo_texto: str) -> bool:
                 raise last_error
             raise OSError('Não foi possível resolver SMTP em IPv4.')
 
-    with _SMTPIPv4(SMTP_HOST, int(SMTP_PORT), timeout=8) as server:
+    with _SMTPIPv4(SMTP_HOST, int(SMTP_PORT), timeout=5) as server:
         if SMTP_USE_TLS:
             server.starttls()
         if SMTP_USER:
@@ -7020,7 +7020,10 @@ def _enviar_email_assincrono(destinatario: str, assunto: str, corpo_texto: str) 
             try:
                 _enviar_email(destinatario, assunto, corpo_texto)
             except Exception as ex:
-                print(f'[EMAIL] falha ao enviar para {destinatario}: {ex}', flush=True)
+                # Falha de SMTP é não-crítica; registra sem travar o log principal
+                import os
+                if os.environ.get('EMAIL_DEBUG'):
+                    print(f'[EMAIL] falha ao enviar para {destinatario}: {ex}', flush=True)
         threading.Thread(target=_job, daemon=True).start()
         return True
     except Exception:
@@ -7065,7 +7068,7 @@ def _enviar_email(destinatario: str, assunto: str, corpo_texto: str) -> bool:
                 raise last_error
             raise OSError('Não foi possível resolver SMTP em IPv4.')
 
-    with _SMTPIPv4(SMTP_HOST, int(SMTP_PORT), timeout=8) as server:
+    with _SMTPIPv4(SMTP_HOST, int(SMTP_PORT), timeout=5) as server:
         if SMTP_USE_TLS:
             server.starttls()
         if SMTP_USER:
