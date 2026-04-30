@@ -28,9 +28,8 @@ def _allowed_routes() -> set:
 
 
 def ensure_page_loader():
-    if app.storage.user.get(LOADER_BOOT_KEY):
-        return
-
+    # Sempre injeta o CSS/JS no render da página.
+    # O controle por app.storage falhava após navegação e a barra externa voltava.
     ui.add_head_html("""
     <style>
       #fsl-page-loader {
@@ -63,12 +62,12 @@ def ensure_page_loader():
         text-transform: uppercase; letter-spacing: .04em; text-align:center;
       }
       /* ===== CORRECAO GLOBAL DE LAYOUT / PWA / MOBILE ===== */
-      html, body { width: 100% !important; height: 100% !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; overscroll-behavior: none !important; background: #f1f5f9 !important; }
+      html, body { width: 100% !important; height: 100% !important; min-height:100% !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; overscroll-behavior: none !important; background: #f1f5f9 !important; }
       *, *::before, *::after { box-sizing: border-box !important; }
       body { position: fixed !important; inset: 0 !important; touch-action: manipulation; }
-      #app, .q-layout, .q-page-container, .q-page, .nicegui-content { width: 100vw !important; height: 100dvh !important; max-width: 100vw !important; max-height: 100dvh !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; background: #f1f5f9 !important; }
-      .fsl-app-shell { width: 100vw !important; height: 100dvh !important; min-height: 100dvh !important; max-height: 100dvh !important; overflow: hidden !important; background: #f1f5f9 !important; }
-      .fsl-sidebar { height: 100dvh !important; min-height: 100dvh !important; max-height: 100dvh !important; align-self: stretch !important; overflow-y: hidden !important; overflow-x: hidden !important; background: #1e293b !important; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+      #app, #__nicegui_root, .q-layout, .q-page-container, .q-page, .nicegui-content, .nicegui-content > div { width: 100vw !important; height: 100dvh !important; min-height:0 !important; max-width: 100vw !important; max-height: 100dvh !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; background: #f1f5f9 !important; }
+      .fsl-app-shell { width: 100vw !important; height: 100dvh !important; min-height: 0 !important; max-height: 100dvh !important; overflow: hidden !important; background: #f1f5f9 !important; display:flex !important; }
+      .fsl-sidebar { height: 100dvh !important; min-height: 0 !important; max-height: 100dvh !important; align-self: stretch !important; overflow-y: hidden !important; overflow-x: hidden !important; background: #1e293b !important; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
       .fsl-sidebar::-webkit-scrollbar { width: 0; height:0; display:none; }
       .fsl-sidebar::-webkit-scrollbar-thumb { background: transparent; }
       @media (orientation: landscape) and (max-height: 560px) { .fsl-sidebar { padding: 8px !important; } .fsl-sidebar .q-btn { min-height: 38px !important; padding-top: 8px !important; padding-bottom: 8px !important; } .fsl-sidebar .q-card { padding: 8px !important; } }
@@ -123,8 +122,9 @@ def ensure_page_loader():
       window.fslPatchButtonsOnce();
     </script>
     <style id="fsl-no-double-click-patch">
-      .nicegui-content > div:first-child { width:100vw !important; height:100dvh !important; overflow:hidden !important; }
-      .q-page { min-height:100dvh !important; overflow:hidden !important; }
+      .nicegui-content > div:first-child { width:100vw !important; height:100dvh !important; max-height:100dvh !important; overflow:hidden !important; }
+      .q-page { min-height:0 !important; height:100dvh !important; max-height:100dvh !important; overflow:hidden !important; }
+      main, .q-page-container { overflow:hidden !important; }
       .q-dialog__inner { overflow:auto !important; }
     </style>
     """)
@@ -182,7 +182,7 @@ def build_menu(current_route: str | None = None):
         ('groups',                 'Equipes',                 '/equipes'),
         ('badge',                  'Funcionários',            '/funcionarios'),
         ('manage_accounts',        'Usuários',                '/usuarios'),
-        ('database',               'Dados',        '/gestao-dados'),
+        ('storage',                'Dados',                   '/gestao-dados'),
         ('bar_chart',              'Dashboard',               '/dashboard'),
     ]
     if _can_view_logs():
@@ -258,15 +258,15 @@ def build_menu(current_route: str | None = None):
                 ativo = bool(rota and rota == current_route)
                 with ui.button(on_click=lambda e=None, r=rota, t=titulo: ir_para(r, t)).props('flat no-caps align=left').classes(classes_botao_menu(ativo)):
                     with ui.row().classes('items-center w-full no-wrap'):
-                        ui.icon(icone).classes('text-[20px] shrink-0')
+                        ui.icon(icone).classes('text-[20px] w-8 min-w-8 text-center shrink-0 flex items-center justify-center')
                         if aberta:
-                            ui.label(titulo).classes('ml-3 text-sm truncate')
+                            ui.label(titulo).classes('ml-2 text-sm truncate')
 
             ui.separator().classes('my-2 bg-white/10')
             with ui.button(on_click=do_logout).props('flat no-caps align=left').classes(classes_botao_logout()):
                 with ui.row().classes('items-center w-full no-wrap'):
-                    ui.icon('logout').classes('text-[20px]')
+                    ui.icon('logout').classes('text-[20px] w-8 min-w-8 text-center shrink-0 flex items-center justify-center')
                     if aberta:
-                        ui.label('Logout').classes('ml-3 text-sm')
+                        ui.label('Logout').classes('ml-2 text-sm')
 
     render_menu()

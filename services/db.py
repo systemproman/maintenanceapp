@@ -5909,6 +5909,53 @@ def criar_token_redefinicao_usuario(usuario_id: str, validade_horas: int = 24, f
     }
 
 
+
+def _enviar_email(destinatario: str, assunto: str, corpo_texto: str) -> bool:
+    """
+    Envio SMTP com timeout curto, sem derrubar a sessão do NiceGUI.
+    Força IPv4 para evitar [Errno 101] Network is unreachable quando o Render tenta rota IPv6.
+    """
+    destinatario = str(destinatario or '').strip()
+    if not destinatario or not _smtp_configurado():
+        return False
+
+    msg = EmailMessage()
+    msg['Subject'] = assunto
+    msg['From'] = f'{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>' if SMTP_FROM_NAME else SMTP_FROM_EMAIL
+    msg['To'] = destinatario
+    msg.set_content(corpo_texto)
+
+    import socket
+
+    class _SMTPIPv4(smtplib.SMTP):
+        def _get_socket(self, host, port, timeout):
+            last_error = None
+            infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+            for family, socktype, proto, _canonname, sockaddr in infos:
+                sock = socket.socket(family, socktype, proto)
+                sock.settimeout(timeout)
+                try:
+                    sock.connect(sockaddr)
+                    return sock
+                except OSError as ex:
+                    last_error = ex
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+            if last_error:
+                raise last_error
+            raise OSError('Não foi possível resolver SMTP em IPv4.')
+
+    with _SMTPIPv4(SMTP_HOST, int(SMTP_PORT), timeout=8) as server:
+        if SMTP_USE_TLS:
+            server.starttls()
+        if SMTP_USER:
+            server.login(SMTP_USER, SMTP_PASSWORD)
+        server.send_message(msg)
+    return True
+
+
 def enviar_link_redefinicao_usuario_email(nome: str, email: str, username: str, link: str, expires_at: str, motivo: str = 'definição de senha') -> bool:
     nome = str(nome or '').strip() or 'Usuário'
     corpo = f'''Olá, {nome}.
@@ -6618,25 +6665,12 @@ def _ensure_system_error_schema():
     conn.commit()
 
 def registrar_erro_sistema(origem: str, erro, contexto: dict | None = None, usuario_id: str | None = None):
-    try:
-        import traceback, json as _json
-        if not _table_exists('system_error_logs'): _ensure_system_error_schema()
-        cur = _cursor()
-        cur.execute("""
-            INSERT INTO system_error_logs (id, origem, mensagem, traceback, contexto_json, usuario_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (str(uuid.uuid4()), str(origem or 'SISTEMA')[:120], str(erro)[:4000], traceback.format_exc()[:12000], _json.dumps(contexto or {}, ensure_ascii=False), usuario_id, _agora_sql()))
-        conn.commit()
-    except Exception:
-        _rollback_safe()
+    # Log de erros do sistema desativado por decisão operacional.
+    # Mantém a função como no-op para não quebrar chamadas existentes.
+    return None
 
 def listar_erros_sistema(limit: int = 300):
-    try:
-        _ensure_system_error_schema()
-        cur = _cursor(); cur.execute('SELECT * FROM system_error_logs ORDER BY created_at DESC LIMIT ?', (int(limit or 300),))
-        return [dict(r) for r in cur.fetchall()]
-    except Exception:
-        _rollback_safe(); return []
+    return []
 
 def _ensure_gestao_dados_permissions():
     global MODULOS_SISTEMA
@@ -6676,7 +6710,7 @@ def listar_pecas_ativo_para_material(ativo_id: str):
         _rollback_safe(); registrar_erro_sistema('LISTAR_PECAS_MATERIAL', ex, {'ativo_id': ativo_id}); return []
 
 def listar_tabela_generica(tabela: str, limit: int = 5000):
-    permitidas = {'ativos','ordens_servico','os_atividades','os_materiais','funcionarios','equipes','usuarios','audit_logs','system_error_logs'}
+    permitidas = {'ativos','ordens_servico','os_atividades','os_materiais','funcionarios','equipes','usuarios','audit_logs'}
     tabela = str(tabela or '').strip()
     if tabela not in permitidas: raise ValueError('Tabela não liberada para exportação.')
     cur = _cursor(); cur.execute(f'SELECT * FROM {tabela} LIMIT ?', (int(limit or 5000),))
@@ -6761,7 +6795,7 @@ def calcular_totais_os(os_id: str):
     return {'custo_materiais': custo_materiais, 'hh_min': hh_min, 'hh_horas': round(hh_min/60,2), 'custo_hh': custo_hh, 'custo_terceiro': custo_terceiro, 'custo_total_os': round(custo_materiais+custo_hh+custo_terceiro,2)}
 
 try:
-    _ensure_system_error_schema(); _ensure_gestao_dados_permissions()
+    _ensure_gestao_dados_permissions()
 except Exception as _edu_patch_ex:
     print(f'[DB][startup] patch Eduardo ignorado: {_edu_patch_ex}', flush=True)
 # ===== FIM PATCH EDUARDO =====================================================
@@ -6847,7 +6881,7 @@ def listar_cargas_dados(limit: int = 30):
 
 
 def listar_tabela_generica(tabela: str, limit: int | None = None):
-    permitidas = {'ativos','ordens_servico','os_atividades','os_materiais','funcionarios','equipes','usuarios','audit_logs','system_error_logs'}
+    permitidas = {'ativos','ordens_servico','os_atividades','os_materiais','funcionarios','equipes','usuarios','audit_logs'}
     tabela = str(tabela or '').strip()
     if tabela not in permitidas:
         raise ValueError('Tabela não liberada para exportação.')
@@ -6982,6 +7016,53 @@ def _enviar_email_assincrono(destinatario: str, assunto: str, corpo_texto: str) 
         return True
     except Exception:
         return False
+
+
+
+def _enviar_email(destinatario: str, assunto: str, corpo_texto: str) -> bool:
+    """
+    Envio SMTP com timeout curto, sem derrubar a sessão do NiceGUI.
+    Força IPv4 para evitar [Errno 101] Network is unreachable quando o Render tenta rota IPv6.
+    """
+    destinatario = str(destinatario or '').strip()
+    if not destinatario or not _smtp_configurado():
+        return False
+
+    msg = EmailMessage()
+    msg['Subject'] = assunto
+    msg['From'] = f'{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>' if SMTP_FROM_NAME else SMTP_FROM_EMAIL
+    msg['To'] = destinatario
+    msg.set_content(corpo_texto)
+
+    import socket
+
+    class _SMTPIPv4(smtplib.SMTP):
+        def _get_socket(self, host, port, timeout):
+            last_error = None
+            infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+            for family, socktype, proto, _canonname, sockaddr in infos:
+                sock = socket.socket(family, socktype, proto)
+                sock.settimeout(timeout)
+                try:
+                    sock.connect(sockaddr)
+                    return sock
+                except OSError as ex:
+                    last_error = ex
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+            if last_error:
+                raise last_error
+            raise OSError('Não foi possível resolver SMTP em IPv4.')
+
+    with _SMTPIPv4(SMTP_HOST, int(SMTP_PORT), timeout=8) as server:
+        if SMTP_USE_TLS:
+            server.starttls()
+        if SMTP_USER:
+            server.login(SMTP_USER, SMTP_PASSWORD)
+        server.send_message(msg)
+    return True
 
 
 def enviar_link_redefinicao_usuario_email(nome: str, email: str, username: str, link: str, expires_at: str, motivo: str = 'definição de senha') -> bool:
