@@ -1201,7 +1201,19 @@ def os_page():
     def abrir_form_material(os_id, atividade):
         with ui.dialog() as dialog, ui.card().classes('w-[700px] max-w-[96vw] p-5 rounded-2xl gap-4'):
             ui.label('NOVO MATERIAL').classes('text-lg font-bold text-slate-800')
-            descricao = ui.input('MATERIAL').props('outlined dense').classes('w-full')
+            alvo_material_id = (detalhe_os.get('os') or {}).get('componente_id') or (detalhe_os.get('os') or {}).get('equipamento_id')
+            opcoes_pecas = []
+            try:
+                opcoes_pecas = db.listar_pecas_ativo_para_material(alvo_material_id)
+            except Exception:
+                opcoes_pecas = []
+            if opcoes_pecas:
+                peca_select = ui.select(opcoes_pecas, label='PEÇA CADASTRADA DO EQUIPAMENTO/COMPONENTE', clearable=True).props('outlined dense options-dense').classes('w-full')
+            else:
+                peca_select = None
+            descricao = ui.input('MATERIAL MANUAL / DESCRIÇÃO').props('outlined dense').classes('w-full')
+            if peca_select:
+                peca_select.on('update:model-value', lambda e=None: setattr(descricao, 'value', peca_select.value or descricao.value))
             quantidade = ui.number('QUANTIDADE', value=1, min=0, step=0.01).props('outlined dense').classes('w-full')
             unidade = ui.input('UNIDADE').props('outlined dense').classes('w-full')
             custo_unitario = ui.number('CUSTO UNITÁRIO').props('outlined dense').classes('w-full')
@@ -1214,7 +1226,11 @@ def os_page():
             custo_unitario.on('update:model-value', atualizar_total)
             atualizar_total()
 
+            salvando = {'v': False}
             def salvar():
+                if salvando['v']:
+                    return
+                salvando['v'] = True
                 try:
                     db.criar_os_material(os_id=os_id, atividade_id=atividade['id'], descricao_material=descricao.value,
                                          quantidade=quantidade.value, custo_unitario=custo_unitario.value, unidade=unidade.value,
@@ -1223,6 +1239,7 @@ def os_page():
                     refresh_current_os(reload_list=False, texto='ATUALIZANDO OS...')
                     ui.notify('MATERIAL SALVO', type='positive')
                 except Exception as ex:
+                    salvando['v'] = False
                     ui.notify(str(ex), type='negative')
 
             with ui.row().classes('w-full justify-end gap-2'):

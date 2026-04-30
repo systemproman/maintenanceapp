@@ -20,6 +20,7 @@ _MODULE_BY_ROUTE = {
     '/usuarios': 'USUARIOS',
     '/dashboard': 'DASHBOARD',
     '/logs': 'LOGS',
+    '/gestao-dados': 'GESTAO_DADOS',
 }
 
 

@@ -108,7 +108,24 @@ def ensure_page_loader():
       } else {
         window.fslEnsurePageLoader();
       }
+    
+      window.fslPatchButtonsOnce = function(){
+        if (window.__fslBtnPatch) return; window.__fslBtnPatch = true;
+        document.addEventListener('click', function(ev){
+          const btn = ev.target.closest('.q-btn');
+          if (!btn) return;
+          if (btn.dataset.fslBusyClick === '1') { ev.preventDefault(); ev.stopPropagation(); return; }
+          btn.dataset.fslBusyClick = '1';
+          setTimeout(function(){ if(btn) btn.dataset.fslBusyClick='0'; }, 650);
+        }, true);
+      };
+      window.fslPatchButtonsOnce();
     </script>
+    <style id="fsl-no-double-click-patch">
+      .nicegui-content > div:first-child { width:100vw !important; height:100dvh !important; overflow:hidden !important; }
+      .q-page { min-height:100dvh !important; overflow:hidden !important; }
+      .q-dialog__inner { overflow:auto !important; }
+    </style>
     """)
 
     app.storage.user[LOADER_BOOT_KEY] = True
@@ -164,6 +181,7 @@ def build_menu(current_route: str | None = None):
         ('groups',                 'Equipes',                 '/equipes'),
         ('badge',                  'Funcionários',            '/funcionarios'),
         ('manage_accounts',        'Usuários',                '/usuarios'),
+        ('database',               'Gestão de Dados',        '/gestao-dados'),
         ('bar_chart',              'Dashboard',               '/dashboard'),
     ]
     if _can_view_logs():

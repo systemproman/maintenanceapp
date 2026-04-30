@@ -17,6 +17,7 @@ from pages.funcionarios import funcionarios_page
 from pages.usuarios import usuarios_page
 from pages.dashboard import dashboard_page
 from pages.logs import logs_page
+from pages.gestao_dados import gestao_dados_page
 from services.db import close_connection, get_anexo, get_connection
 from keepalive import setup_keepalive
 from pwa import inject_pwa_head, setup_global_pwa
@@ -163,6 +164,11 @@ def page_dashboard():
 @ui.page('/logs')
 def page_logs():
     _protect_page(logs_page, '/logs')
+
+
+@ui.page('/gestao-dados')
+def page_gestao_dados():
+    _protect_page(gestao_dados_page, '/gestao-dados')
 
 
 PORT = int(os.environ.get('PORT', 8080))

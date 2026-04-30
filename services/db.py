@@ -408,7 +408,17 @@ def _new_postgres_connection():
         from psycopg.rows import dict_row
     except Exception as ex:
         raise RuntimeError('Instale psycopg[binary] para usar Supabase/Postgres.') from ex
-    return psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False, connect_timeout=5)
+    raw = psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False, connect_timeout=5)
+    try:
+        with raw.cursor() as cur:
+            cur.execute("SET TIME ZONE 'America/Campo_Grande'")
+        raw.commit()
+    except Exception:
+        try:
+            raw.rollback()
+        except Exception:
+            pass
+    return raw
 
 
 if DB_MODE == 'sqlite':
@@ -6567,3 +6577,224 @@ def close_connection(conn_to_close=None):
             target.close()
     except Exception as e:
         print(f'[DB] erro ao fechar conexão: {e}', flush=True)
+
+# ===== PATCH EDUARDO 2026-04-29: FUSO CG-MS / LOG ERROS / GESTAO DADOS / OS =====
+CAMPO_GRANDE_TZ = 'America/Campo_Grande'
+
+def _agora_cg_iso() -> str:
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(CAMPO_GRANDE_TZ)).replace(microsecond=0).isoformat(sep=' ')
+    except Exception:
+        return datetime.now().replace(microsecond=0).isoformat(sep=' ')
+
+def _agora_sql() -> str:
+    return _agora_cg_iso()
+
+def _rollback_safe():
+    try: get_connection().rollback()
+    except Exception: pass
+
+def _table_exists(table_name: str) -> bool:
+    try:
+        cur = _cursor(); cur.execute(f'PRAGMA table_info({table_name})')
+        return bool(cur.fetchall())
+    except Exception:
+        return False
+
+def _ensure_system_error_schema():
+    cur = _cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS system_error_logs (
+            id TEXT PRIMARY KEY, origem TEXT NOT NULL, mensagem TEXT NOT NULL,
+            traceback TEXT NULL, contexto_json TEXT NULL, usuario_id TEXT NULL,
+            resolvido INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    try:
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_system_error_logs_created_at ON system_error_logs(created_at)')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_system_error_logs_origem ON system_error_logs(origem)')
+    except Exception: pass
+    conn.commit()
+
+def registrar_erro_sistema(origem: str, erro, contexto: dict | None = None, usuario_id: str | None = None):
+    try:
+        import traceback, json as _json
+        if not _table_exists('system_error_logs'): _ensure_system_error_schema()
+        cur = _cursor()
+        cur.execute("""
+            INSERT INTO system_error_logs (id, origem, mensagem, traceback, contexto_json, usuario_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (str(uuid.uuid4()), str(origem or 'SISTEMA')[:120], str(erro)[:4000], traceback.format_exc()[:12000], _json.dumps(contexto or {}, ensure_ascii=False), usuario_id, _agora_sql()))
+        conn.commit()
+    except Exception:
+        _rollback_safe()
+
+def listar_erros_sistema(limit: int = 300):
+    try:
+        _ensure_system_error_schema()
+        cur = _cursor(); cur.execute('SELECT * FROM system_error_logs ORDER BY created_at DESC LIMIT ?', (int(limit or 300),))
+        return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        _rollback_safe(); return []
+
+def _ensure_gestao_dados_permissions():
+    global MODULOS_SISTEMA
+    try:
+        if 'GESTAO_DADOS' not in MODULOS_SISTEMA:
+            MODULOS_SISTEMA.append('GESTAO_DADOS')
+        _ensure_access_control_schema()
+        cur = _cursor()
+        for perfil in listar_perfis_acesso():
+            nome = str(perfil.get('nome') or '').upper()
+            vals = {c: 0 for c in CAMPOS_PERMISSAO_SISTEMA}
+            if nome == 'ADMIN': vals = {c: 1 for c in CAMPOS_PERMISSAO_SISTEMA}
+            cur.execute(f"INSERT INTO perfil_permissoes (id, perfil_nome, modulo, {', '.join(CAMPOS_PERMISSAO_SISTEMA)}, created_at, updated_at) VALUES (?, ?, 'GESTAO_DADOS', {', '.join(['?']*len(CAMPOS_PERMISSAO_SISTEMA))}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) ON CONFLICT (perfil_nome, modulo) DO NOTHING", (str(uuid.uuid4()), nome, *[vals[c] for c in CAMPOS_PERMISSAO_SISTEMA]))
+        conn.commit()
+    except Exception as ex:
+        _rollback_safe(); registrar_erro_sistema('PERMISSOES_GESTAO_DADOS', ex)
+
+def listar_pecas_ativo_para_material(ativo_id: str):
+    try:
+        import json as _json
+        cur = _cursor(); cur.execute('SELECT pecas_json FROM ativos WHERE id = ?', (ativo_id,))
+        itens=[]
+        for row in cur.fetchall():
+            txt = dict(row).get('pecas_json')
+            if not txt: continue
+            try: data=_json.loads(txt)
+            except Exception: data=[]
+            if isinstance(data, list):
+                for peca in data:
+                    if isinstance(peca, dict):
+                        nome = peca.get('descricao') or peca.get('nome') or peca.get('peca') or peca.get('tag')
+                        qtd = peca.get('quantidade') or peca.get('qtd') or ''
+                        if nome: itens.append(f"{str(nome).upper()}{(' - ' + str(qtd) + ' PÇS') if qtd not in ('', None) else ''}")
+                    elif peca: itens.append(str(peca).upper())
+        return list(dict.fromkeys(itens))
+    except Exception as ex:
+        _rollback_safe(); registrar_erro_sistema('LISTAR_PECAS_MATERIAL', ex, {'ativo_id': ativo_id}); return []
+
+def listar_tabela_generica(tabela: str, limit: int = 5000):
+    permitidas = {'ativos','ordens_servico','os_atividades','os_materiais','funcionarios','equipes','usuarios','audit_logs','system_error_logs'}
+    tabela = str(tabela or '').strip()
+    if tabela not in permitidas: raise ValueError('Tabela não liberada para exportação.')
+    cur = _cursor(); cur.execute(f'SELECT * FROM {tabela} LIMIT ?', (int(limit or 5000),))
+    return [dict(r) for r in cur.fetchall()]
+
+def colunas_tabela_generica(tabela: str):
+    return sorted(_get_columns(tabela))
+
+def importar_tabela_generica(tabela: str, linhas: list[dict], modo: str = 'upsert'):
+    permitidas = {'ativos','funcionarios','equipes'}
+    tabela = str(tabela or '').strip()
+    if tabela not in permitidas: raise ValueError('Importação liberada somente para ativos, funcionários e equipes.')
+    cols_db = _get_columns(tabela)
+    if not linhas: return {'linhas': 0}
+    cur = _cursor(); count=0
+    for item in linhas:
+        payload = {k: v for k,v in (item or {}).items() if k in cols_db and k not in {'created_at','updated_at'}}
+        if not payload: continue
+        if not payload.get('id'): payload['id'] = str(uuid.uuid4())
+        if 'updated_at' in cols_db: payload['updated_at'] = _agora_sql()
+        if 'created_at' in cols_db and not payload.get('created_at'): payload['created_at'] = _agora_sql()
+        cols=list(payload.keys()); vals=[payload[c] for c in cols]
+        if modo == 'insert':
+            cur.execute(f"INSERT INTO {tabela} ({', '.join(cols)}) VALUES ({', '.join(['?']*len(cols))})", tuple(vals))
+        else:
+            update_cols=[c for c in cols if c!='id']
+            cur.execute(f"INSERT INTO {tabela} ({', '.join(cols)}) VALUES ({', '.join(['?']*len(cols))}) ON CONFLICT (id) DO UPDATE SET {', '.join([c+' = EXCLUDED.'+c for c in update_cols])}", tuple(vals))
+        count += 1
+    conn.commit(); return {'linhas': count}
+
+def dashboard_retrabalho(periodo_inicio: Optional[str] = None, periodo_fim: Optional[str] = None, equipamento_id: Optional[str] = None, limit: int = 20):
+    cur = _cursor(); filtro_periodo, params = _dashboard_periodo_equipamento_filter(periodo_inicio, periodo_fim, equipamento_id, 'os')
+    cur.execute(f"""
+        SELECT os.equipamento_id, os.componente_id, eq.tag AS equipamento_tag, eq.descricao AS equipamento_descricao,
+               cp.tag AS componente_tag, cp.descricao AS componente_descricao, COUNT(os.id) AS qtd_os_geral,
+               SUM(CASE WHEN UPPER(COALESCE(os.status,'')) = 'ABERTA' THEN 1 ELSE 0 END) AS qtd_aberta,
+               SUM(CASE WHEN UPPER(COALESCE(os.status,'')) IN ('EM EXECUÇÃO','EM EXECUCAO') THEN 1 ELSE 0 END) AS qtd_execucao,
+               SUM(CASE WHEN UPPER(COALESCE(os.status,'')) = 'ENCERRADA' THEN 1 ELSE 0 END) AS qtd_encerrada,
+               MAX(date(COALESCE(os.data_encerramento, os.updated_at, os.created_at))) AS ultima_data_encerramento
+        FROM ordens_servico os JOIN ativos eq ON eq.id = os.equipamento_id LEFT JOIN ativos cp ON cp.id = os.componente_id
+        WHERE UPPER(COALESCE(os.status,'')) IN ('ABERTA','EM EXECUÇÃO','EM EXECUCAO','ENCERRADA') {filtro_periodo}
+        GROUP BY os.equipamento_id, os.componente_id, eq.tag, eq.descricao, cp.tag, cp.descricao
+        HAVING COUNT(os.id) > 1 ORDER BY qtd_os_geral DESC, eq.tag ASC, cp.tag ASC LIMIT ?
+    """, tuple(params) + (int(limit),))
+    linhas=[]; total_retrabalho=0
+    for row in cur.fetchall():
+        item=dict(row); qtd=int(item.get('qtd_os_geral') or 0)
+        item['qtd_os_encerradas']=qtd; item['qtd_reincidencias']=max(qtd-1,0)
+        total_retrabalho += item['qtd_reincidencias']; linhas.append(item)
+    cur.execute(f"SELECT COUNT(*) AS total_geral FROM ordens_servico os WHERE UPPER(COALESCE(os.status,'')) IN ('ABERTA','EM EXECUÇÃO','EM EXECUCAO','ENCERRADA') {filtro_periodo}", params)
+    total=int(dict(cur.fetchone() or {}).get('total_geral') or 0)
+    return {'total_retrabalho': total_retrabalho, 'itens_reincidentes': len(linhas), 'total_encerradas': total, 'percentual_os_retrabalho': round((total_retrabalho/total)*100,2) if total else 0.0, 'linhas': linhas}
+
+def atualizar_os(os_id: str, alvo_ativo_id: str, descricao: str, tipo_os: Optional[str] = None, prioridade: Optional[str] = None, observacoes: Optional[str] = None, status: Optional[str] = None, justificativa_encerramento: Optional[str] = None, data_abertura: Optional[str] = None, unidade_medidor: Optional[str] = None, medidor_valor: Optional[float] = None, custo_terceiro: Optional[float] = None, descricao_servico_terceiro: Optional[str] = None, data_encerramento: Optional[str] = None, usuario_encerramento: Optional[str] = None, **kwargs):
+    try:
+        atual = _get_os_row(os_id)
+        if not atual: raise ValueError('OS não encontrada.')
+        descricao = _upper(descricao)
+        if not descricao: raise ValueError('Informe a DESCRIÇÃO da OS.')
+        alvo = _resolver_alvo_os(alvo_ativo_id); novo_status = _upper(status or atual['status'] or 'ABERTA')
+        cols = _get_columns('ordens_servico')
+        if novo_status == 'ENCERRADA':
+            cur0 = _cursor(); cur0.execute("UPDATE os_atividades SET status = 'CONCLUÍDA', updated_at = ? WHERE os_id = ? AND UPPER(COALESCE(status,'')) <> 'CONCLUÍDA'", (_agora_sql(), os_id))
+            data_final = _text(data_encerramento) or _agora_sql()
+        else: data_final = None
+        set_map = {'origem_tipo': alvo['origem_tipo'], 'equipamento_id': alvo['equipamento_id'], 'componente_id': alvo['componente_id'], 'descricao': descricao, 'tipo_os': _upper(tipo_os), 'prioridade': _upper(prioridade), 'observacoes': _text(observacoes), 'data_abertura': _text(data_abertura) or _text(atual.get('data_abertura')), 'unidade_medidor': _upper(unidade_medidor) or _upper(atual.get('unidade_medidor')) or 'HORÍMETRO', 'medidor_valor': float(medidor_valor) if medidor_valor not in ('', None) else atual.get('medidor_valor'), 'status': novo_status, 'justificativa_encerramento': _text(justificativa_encerramento), 'data_encerramento': data_final, 'updated_at': _agora_sql()}
+        if 'custo_terceiro' in cols: set_map['custo_terceiro'] = float(custo_terceiro) if custo_terceiro not in ('', None) else float(atual.get('custo_terceiro') or 0)
+        if 'descricao_servico_terceiro' in cols: set_map['descricao_servico_terceiro'] = _text(descricao_servico_terceiro)
+        if 'usuario_encerramento' in cols and novo_status == 'ENCERRADA': set_map['usuario_encerramento'] = _text(usuario_encerramento)
+        keys=[k for k in set_map if k in cols]; cur=_cursor(); cur.execute(f"UPDATE ordens_servico SET {', '.join([k+' = ?' for k in keys])} WHERE id = ?", tuple(set_map[k] for k in keys)+(os_id,))
+        conn.commit(); return get_os(os_id)
+    except Exception as ex:
+        _rollback_safe(); registrar_erro_sistema('ATUALIZAR_OS', ex, {'os_id': os_id}); raise
+
+def calcular_totais_os(os_id: str):
+    cur = _cursor(); cur.execute('SELECT COALESCE(SUM(custo_total),0) AS v FROM os_materiais WHERE os_id = ?', (os_id,)); custo_materiais=float(dict(cur.fetchone() or {}).get('v') or 0)
+    cur.execute('SELECT COALESCE(SUM(duracao_min),0) AS v, COALESCE(SUM(custo_hh),0) AS chh, COALESCE(SUM(custo_servico_terceiro),0) AS cst FROM os_atividades WHERE os_id = ?', (os_id,)); r=dict(cur.fetchone() or {})
+    hh_min=float(r.get('v') or 0); custo_hh=float(r.get('chh') or 0); custo_terceiro=float(r.get('cst') or 0)
+    try:
+        cur.execute('SELECT COALESCE(custo_terceiro,0) AS extra FROM ordens_servico WHERE id = ?', (os_id,)); custo_terceiro += float(dict(cur.fetchone() or {}).get('extra') or 0)
+    except Exception: pass
+    return {'custo_materiais': custo_materiais, 'hh_min': hh_min, 'hh_horas': round(hh_min/60,2), 'custo_hh': custo_hh, 'custo_terceiro': custo_terceiro, 'custo_total_os': round(custo_materiais+custo_hh+custo_terceiro,2)}
+
+try:
+    _ensure_system_error_schema(); _ensure_gestao_dados_permissions()
+except Exception as _edu_patch_ex:
+    print(f'[DB][startup] patch Eduardo ignorado: {_edu_patch_ex}', flush=True)
+# ===== FIM PATCH EDUARDO =====================================================
+
+# ===== PATCH PERFIS CUSTOMIZÁVEIS EDUARDO ===================================
+def _normalize_perfil_acesso(nome: str) -> str:
+    valor = str(nome or '').strip().upper()
+    mapa = {'GERENCIA': 'GESTOR', 'COMPLETO': 'GESTOR', 'TECNICO': 'EXECUTOR'}
+    valor = mapa.get(valor, valor)
+    if not valor:
+        return 'VISUALIZACAO'
+    try:
+        cur = _cursor()
+        cur.execute('SELECT nome FROM perfis_acesso WHERE UPPER(nome) = ? AND COALESCE(ativo,1) = 1', (valor,))
+        if cur.fetchone():
+            return valor
+    except Exception:
+        pass
+    return valor if valor in PERFIS_ACESSO_PADRAO else 'VISUALIZACAO'
+
+def ocultar_perfis_padrao_operacionais():
+    """Deixa como perfil padrão visível apenas ADMIN e VISUALIZACAO; perfis novos continuam liberados."""
+    try:
+        cur = _cursor()
+        cur.execute("UPDATE perfis_acesso SET ativo = 0 WHERE nome IN ('GESTOR','PLANEJADOR','EXECUTOR') AND nome NOT IN (SELECT DISTINCT UPPER(COALESCE(nivel_acesso,'')) FROM usuarios)")
+        conn.commit()
+    except Exception as ex:
+        _rollback_safe()
+        try: registrar_erro_sistema('OCULTAR_PERFIS_PADRAO', ex)
+        except Exception: pass
+
+try:
+    ocultar_perfis_padrao_operacionais()
+except Exception:
+    pass
+# ===== FIM PATCH PERFIS CUSTOMIZÁVEIS =======================================

@@ -26,6 +26,7 @@ MODULO_LABEL = {
     'USUARIOS':     'Usuários',
     'DASHBOARD':    'Dashboard',
     'LOGS':         'Log de Ações',
+    'GESTAO_DADOS': 'Gestão de Dados',
 }
 
 
