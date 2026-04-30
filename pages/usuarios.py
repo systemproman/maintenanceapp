@@ -1,4 +1,12 @@
 from nicegui import ui
+
+
+def safe_notify(message: str, type_: str = 'info', multi_line: bool = False) -> None:
+    try:
+        ui.notify(str(message), type=type_, multi_line=multi_line)
+    except Exception:
+        pass
+
 from components.menu import build_menu, hide_page_loader
 from auth import can_manage_users, can_manage_permissions, refresh_permissions, is_admin
 from services import db
@@ -26,13 +34,13 @@ MODULO_LABEL = {
     'USUARIOS':     'Usuários',
     'DASHBOARD':    'Dashboard',
     'LOGS':         'Log de Ações',
-    'GESTAO_DADOS': 'Gestão de Dados',
+    'GESTAO_DADOS': 'Dados',
 }
 
 
 def usuarios_page():
     if not can_manage_users():
-        ui.notify('Acesso restrito ao Administrador.', type='negative')
+        safe_notify('Acesso restrito ao Administrador.', type_='negative')
         ui.navigate.to('/home')
         return
 
@@ -132,9 +140,9 @@ def usuarios_page():
                     try:
                         db.salvar_permissoes_perfil_completo(pn, payload)
                         refresh_permissions()
-                        ui.notify(f'Permissões do perfil {pn} salvas com sucesso.', type='positive')
+                        safe_notify(f'Permissões do perfil {pn} salvas com sucesso.', type_='positive')
                     except Exception as ex:
-                        ui.notify(str(ex), type='negative', multi_line=True)
+                        safe_notify(str(ex), type_='negative', multi_line=True)
 
                 with ui.row().classes('w-full justify-end pt-2'):
                     ui.button('SALVAR PERFIL', icon='save', on_click=_salvar).props('unelevated').classes('bg-amber-500 text-black font-bold')
@@ -149,11 +157,11 @@ def usuarios_page():
             def salvar():
                 try:
                     db.criar_perfil_acesso(nome_inp.value, desc_inp.value or '')
-                    ui.notify('Perfil criado. Configure as permissões abaixo.', type='positive')
+                    safe_notify('Perfil criado. Configure as permissões abaixo.', type_='positive')
                     dialog.close()
                     render()
                 except Exception as ex:
-                    ui.notify(str(ex), type='negative', multi_line=True)
+                    safe_notify(str(ex), type_='negative', multi_line=True)
 
             with ui.row().classes('w-full justify-end gap-2'):
                 ui.button('CANCELAR', on_click=dialog.close).props('flat')
@@ -170,11 +178,11 @@ def usuarios_page():
             def salvar():
                 try:
                     db.renomear_perfil_acesso(nome_atual, nome_inp.value, desc_inp.value or '')
-                    ui.notify('Perfil atualizado.', type='positive')
+                    safe_notify('Perfil atualizado.', type_='positive')
                     dialog.close()
                     render()
                 except Exception as ex:
-                    ui.notify(str(ex), type='negative', multi_line=True)
+                    safe_notify(str(ex), type_='negative', multi_line=True)
 
             with ui.row().classes('w-full justify-end gap-2'):
                 ui.button('CANCELAR', on_click=dialog.close).props('flat')
@@ -189,11 +197,11 @@ def usuarios_page():
             def confirmar():
                 try:
                     db.excluir_perfil_acesso(nome)
-                    ui.notify(f'Perfil "{nome}" excluído.', type='positive')
+                    safe_notify(f'Perfil "{nome}" excluído.', type_='positive')
                     dialog.close()
                     render()
                 except Exception as ex:
-                    ui.notify(str(ex), type='negative', multi_line=True)
+                    safe_notify(str(ex), type_='negative', multi_line=True)
 
             with ui.row().classes('justify-end gap-2'):
                 ui.button('CANCELAR', on_click=dialog.close).props('flat')
@@ -285,11 +293,11 @@ def usuarios_page():
                     dialog.close()
                     render()
                     if resultado.get('email_enviado'):
-                        ui.notify('Usuário salvo e credenciais enviadas por e-mail.', type='positive')
+                        safe_notify('Usuário salvo e credenciais enviadas por e-mail.', type_='positive')
                     else:
-                        ui.notify('Usuário salvo. SMTP não configurado ou envio falhou.', type='warning', multi_line=True)
+                        safe_notify('Usuário salvo. SMTP não configurado ou envio falhou.', type_='warning', multi_line=True)
                 except Exception as ex:
-                    ui.notify(str(ex), type='negative', multi_line=True)
+                    safe_notify(str(ex), type_='negative', multi_line=True)
 
             with ui.row().classes('w-full justify-end gap-2'):
                 ui.button('CANCELAR', on_click=dialog.close).props('flat')
@@ -306,11 +314,11 @@ def usuarios_page():
                     resultado = db.resetar_senha_usuario(item['id'], enviar_email=True)
                     dialog.close()
                     if resultado.get('email_enviado'):
-                        ui.notify('Link enviado com sucesso.', type='positive')
+                        safe_notify('Link enviado com sucesso.', type_='positive')
                     else:
-                        ui.notify('Link gerado, mas o e-mail não foi enviado. Configure o SMTP.', type='warning', multi_line=True)
+                        safe_notify('Link gerado, mas o e-mail não foi enviado. Configure o SMTP.', type_='warning', multi_line=True)
                 except Exception as ex:
-                    ui.notify(str(ex), type='negative')
+                    safe_notify(str(ex), type_='negative')
 
             with ui.row().classes('justify-end gap-2'):
                 ui.button('CANCELAR', on_click=dialog.close).props('flat')
@@ -327,7 +335,7 @@ def usuarios_page():
                     dialog.close()
                     render()
                 except Exception as ex:
-                    ui.notify(str(ex), type='negative')
+                    safe_notify(str(ex), type_='negative')
 
             with ui.row().classes('justify-end gap-2'):
                 ui.button('CANCELAR', on_click=dialog.close).props('flat')

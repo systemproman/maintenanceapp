@@ -6843,6 +6843,9 @@ def _ensure_data_import_schema():
             modo TEXT NULL,
             linhas INTEGER NOT NULL DEFAULT 0,
             usuario_id TEXT NULL,
+            usuario_nome TEXT NULL,
+            arquivo_nome TEXT NULL,
+            descricao TEXT NULL,
             revertido INTEGER NOT NULL DEFAULT 0,
             reverted_at TEXT NULL,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -6861,6 +6864,13 @@ def _ensure_data_import_schema():
         )
     """)
     try:
+        cols = _get_columns('data_import_batches')
+        for col in ('usuario_nome', 'arquivo_nome', 'descricao'):
+            if col not in cols:
+                cur.execute(f'ALTER TABLE data_import_batches ADD COLUMN {col} TEXT NULL')
+    except Exception:
+        pass
+    try:
         cur.execute('CREATE INDEX IF NOT EXISTS idx_data_import_snapshots_batch ON data_import_snapshots(batch_id)')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_data_import_batches_created ON data_import_batches(created_at)')
     except Exception:
@@ -6868,17 +6878,15 @@ def _ensure_data_import_schema():
     conn.commit()
 
 
-def listar_cargas_dados(limit: int = 30):
+def listar_cargas_dados(limit: int = 200):
     try:
         _ensure_data_import_schema()
         cur = _cursor()
-        cur.execute('SELECT * FROM data_import_batches ORDER BY created_at DESC LIMIT ?', (int(limit or 30),))
+        cur.execute('SELECT * FROM data_import_batches ORDER BY created_at DESC LIMIT ?', (int(limit or 200),))
         return [dict(r) for r in cur.fetchall()]
-    except Exception as ex:
+    except Exception:
         _rollback_safe()
-        registrar_erro_sistema('LISTAR_CARGAS_DADOS', ex)
         return []
-
 
 def listar_tabela_generica(tabela: str, limit: int | None = None):
     permitidas = {'ativos','ordens_servico','os_atividades','os_materiais','funcionarios','equipes','usuarios','audit_logs'}
@@ -6893,7 +6901,7 @@ def listar_tabela_generica(tabela: str, limit: int | None = None):
     return [dict(r) for r in cur.fetchall()]
 
 
-def importar_tabela_generica(tabela: str, linhas: list[dict], modo: str = 'upsert', usuario_id: str | None = None):
+def importar_tabela_generica(tabela: str, linhas: list[dict], modo: str = 'upsert', usuario_id: str | None = None, usuario_nome: str | None = None, arquivo_nome: str | None = None):
     permitidas = {'ativos','funcionarios','equipes'}
     tabela = str(tabela or '').strip()
     if tabela not in permitidas:
@@ -6905,9 +6913,10 @@ def importar_tabela_generica(tabela: str, linhas: list[dict], modo: str = 'upser
     batch_id = str(uuid.uuid4())
     cur = _cursor()
     count = 0
+    descricao = f"Importação XLSX em {tabela} ({str(modo or 'upsert')})"
     cur.execute(
-        'INSERT INTO data_import_batches (id, tabela, modo, linhas, usuario_id, created_at) VALUES (?, ?, ?, 0, ?, ?)',
-        (batch_id, tabela, str(modo or 'upsert'), usuario_id, _agora_sql()),
+        'INSERT INTO data_import_batches (id, tabela, modo, linhas, usuario_id, usuario_nome, arquivo_nome, descricao, created_at) VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?)',
+        (batch_id, tabela, str(modo or 'upsert'), usuario_id, usuario_nome, arquivo_nome, descricao, _agora_sql()),
     )
     try:
         for item in linhas:
@@ -6989,7 +6998,7 @@ def reverter_carga_dados(batch_id: str, usuario_id: str | None = None):
                     tuple(vals),
                 )
             count += 1
-        cur.execute('UPDATE data_import_batches SET revertido = 1, reverted_at = ? WHERE id = ?', (_agora_sql(), batch_id))
+        cur.execute('UPDATE data_import_batches SET revertido = 1, reverted_at = ?, descricao = ? WHERE id = ?', (_agora_sql(), 'Carga revertida', batch_id))
         conn.commit()
         try:
             registrar_log_acao('REVERTER_CARGA_DADOS', 'DADOS', batch_id, {'tabela': tabela, 'linhas': count}, usuario_id=usuario_id)
