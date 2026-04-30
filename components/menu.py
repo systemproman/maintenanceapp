@@ -64,12 +64,13 @@ def ensure_page_loader():
       }
       /* ===== CORRECAO GLOBAL DE LAYOUT / PWA / MOBILE ===== */
       html, body { width: 100% !important; height: 100% !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; overscroll-behavior: none !important; background: #f1f5f9 !important; }
+      *, *::before, *::after { box-sizing: border-box !important; }
       body { position: fixed !important; inset: 0 !important; touch-action: manipulation; }
       #app, .q-layout, .q-page-container, .q-page, .nicegui-content { width: 100vw !important; height: 100dvh !important; max-width: 100vw !important; max-height: 100dvh !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; background: #f1f5f9 !important; }
       .fsl-app-shell { width: 100vw !important; height: 100dvh !important; min-height: 100dvh !important; max-height: 100dvh !important; overflow: hidden !important; background: #f1f5f9 !important; }
-      .fsl-sidebar { height: 100dvh !important; min-height: 100dvh !important; max-height: 100dvh !important; align-self: stretch !important; overflow-y: auto !important; overflow-x: hidden !important; background: #1e293b !important; -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
-      .fsl-sidebar::-webkit-scrollbar { width: 6px; }
-      .fsl-sidebar::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 999px; }
+      .fsl-sidebar { height: 100dvh !important; min-height: 100dvh !important; max-height: 100dvh !important; align-self: stretch !important; overflow-y: hidden !important; overflow-x: hidden !important; background: #1e293b !important; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+      .fsl-sidebar::-webkit-scrollbar { width: 0; height:0; display:none; }
+      .fsl-sidebar::-webkit-scrollbar-thumb { background: transparent; }
       @media (orientation: landscape) and (max-height: 560px) { .fsl-sidebar { padding: 8px !important; } .fsl-sidebar .q-btn { min-height: 38px !important; padding-top: 8px !important; padding-bottom: 8px !important; } .fsl-sidebar .q-card { padding: 8px !important; } }
       @supports (-webkit-touch-callout: none) { .fsl-app-shell, .fsl-sidebar, #app, .q-layout, .q-page-container, .q-page, .nicegui-content { height: -webkit-fill-available !important; max-height: -webkit-fill-available !important; } }
       body.fsl-busy, body.fsl-busy * { cursor: progress !important; }
@@ -181,7 +182,7 @@ def build_menu(current_route: str | None = None):
         ('groups',                 'Equipes',                 '/equipes'),
         ('badge',                  'Funcionários',            '/funcionarios'),
         ('manage_accounts',        'Usuários',                '/usuarios'),
-        ('database',               'Gestão de Dados',        '/gestao-dados'),
+        ('database',               'Dados',        '/gestao-dados'),
         ('bar_chart',              'Dashboard',               '/dashboard'),
     ]
     if _can_view_logs():
@@ -193,7 +194,7 @@ def build_menu(current_route: str | None = None):
     modo_label = _ROLE_LABEL.get(role, role)
 
     sidebar = ui.column().classes(
-        'fsl-sidebar h-full bg-slate-800 text-white p-3 gap-2 shrink-0 shadow-lg transition-all duration-300'
+        'fsl-sidebar h-full bg-slate-800 text-white p-3 gap-1 shrink-0 shadow-lg transition-all duration-300'
     )
 
     def ir_para(rota, titulo):
@@ -216,13 +217,13 @@ def build_menu(current_route: str | None = None):
         return f'width: {largura}; border-right: 1px solid rgba(255,255,255,0.08);'
 
     def classes_botao_menu(ativo: bool) -> str:
-        base = 'w-full justify-start rounded-xl px-3 py-3 '
+        base = 'w-full justify-start rounded-xl px-3 py-2.5 '
         if ativo:
             return base + 'bg-amber-500 text-black font-bold shadow-sm'
         return base + 'hover:bg-orange-500/20 text-white'
 
     def classes_botao_logout() -> str:
-        return 'w-full justify-start rounded-xl px-3 py-3 hover:bg-red-500/20 text-red-300'
+        return 'w-full justify-start rounded-xl px-3 py-2.5 hover:bg-red-500/20 text-red-300'
 
     # cor do badge de perfil
     _ROLE_COLOR = {

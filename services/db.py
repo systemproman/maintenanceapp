@@ -6715,7 +6715,7 @@ def dashboard_retrabalho(periodo_inicio: Optional[str] = None, periodo_fim: Opti
                SUM(CASE WHEN UPPER(COALESCE(os.status,'')) = 'ABERTA' THEN 1 ELSE 0 END) AS qtd_aberta,
                SUM(CASE WHEN UPPER(COALESCE(os.status,'')) IN ('EM EXECUÇÃO','EM EXECUCAO') THEN 1 ELSE 0 END) AS qtd_execucao,
                SUM(CASE WHEN UPPER(COALESCE(os.status,'')) = 'ENCERRADA' THEN 1 ELSE 0 END) AS qtd_encerrada,
-               MAX(date(COALESCE(os.data_encerramento, os.updated_at, os.created_at))) AS ultima_data_encerramento
+               MAX(date(COALESCE(NULLIF(CAST(os.data_encerramento AS TEXT), ''), CAST(os.updated_at AS TEXT), CAST(os.created_at AS TEXT)))) AS ultima_data_encerramento
         FROM ordens_servico os JOIN ativos eq ON eq.id = os.equipamento_id LEFT JOIN ativos cp ON cp.id = os.componente_id
         WHERE UPPER(COALESCE(os.status,'')) IN ('ABERTA','EM EXECUÇÃO','EM EXECUCAO','ENCERRADA') {filtro_periodo}
         GROUP BY os.equipamento_id, os.componente_id, eq.tag, eq.descricao, cp.tag, cp.descricao
@@ -6798,3 +6798,218 @@ try:
 except Exception:
     pass
 # ===== FIM PATCH PERFIS CUSTOMIZÁVEIS =======================================
+
+# ===== HOTFIX 2026-04-30: DADOS / REVERSAO / EXPORT SEM LIMITE / EMAIL NAO BLOQUEANTE =====
+def _ensure_data_import_schema():
+    cur = _cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS data_import_batches (
+            id TEXT PRIMARY KEY,
+            tabela TEXT NOT NULL,
+            modo TEXT NULL,
+            linhas INTEGER NOT NULL DEFAULT 0,
+            usuario_id TEXT NULL,
+            revertido INTEGER NOT NULL DEFAULT 0,
+            reverted_at TEXT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS data_import_snapshots (
+            id TEXT PRIMARY KEY,
+            batch_id TEXT NOT NULL,
+            tabela TEXT NOT NULL,
+            registro_id TEXT NOT NULL,
+            acao TEXT NOT NULL,
+            old_json TEXT NULL,
+            new_json TEXT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    try:
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_data_import_snapshots_batch ON data_import_snapshots(batch_id)')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_data_import_batches_created ON data_import_batches(created_at)')
+    except Exception:
+        pass
+    conn.commit()
+
+
+def listar_cargas_dados(limit: int = 30):
+    try:
+        _ensure_data_import_schema()
+        cur = _cursor()
+        cur.execute('SELECT * FROM data_import_batches ORDER BY created_at DESC LIMIT ?', (int(limit or 30),))
+        return [dict(r) for r in cur.fetchall()]
+    except Exception as ex:
+        _rollback_safe()
+        registrar_erro_sistema('LISTAR_CARGAS_DADOS', ex)
+        return []
+
+
+def listar_tabela_generica(tabela: str, limit: int | None = None):
+    permitidas = {'ativos','ordens_servico','os_atividades','os_materiais','funcionarios','equipes','usuarios','audit_logs','system_error_logs'}
+    tabela = str(tabela or '').strip()
+    if tabela not in permitidas:
+        raise ValueError('Tabela não liberada para exportação.')
+    cur = _cursor()
+    if limit in (None, '', 0, '0'):
+        cur.execute(f'SELECT * FROM {tabela}')
+    else:
+        cur.execute(f'SELECT * FROM {tabela} LIMIT ?', (int(limit),))
+    return [dict(r) for r in cur.fetchall()]
+
+
+def importar_tabela_generica(tabela: str, linhas: list[dict], modo: str = 'upsert', usuario_id: str | None = None):
+    permitidas = {'ativos','funcionarios','equipes'}
+    tabela = str(tabela or '').strip()
+    if tabela not in permitidas:
+        raise ValueError('Importação liberada somente para ativos, funcionários e equipes.')
+    cols_db = _get_columns(tabela)
+    if not linhas:
+        return {'linhas': 0, 'batch_id': None}
+    _ensure_data_import_schema()
+    batch_id = str(uuid.uuid4())
+    cur = _cursor()
+    count = 0
+    cur.execute(
+        'INSERT INTO data_import_batches (id, tabela, modo, linhas, usuario_id, created_at) VALUES (?, ?, ?, 0, ?, ?)',
+        (batch_id, tabela, str(modo or 'upsert'), usuario_id, _agora_sql()),
+    )
+    try:
+        for item in linhas:
+            payload = {str(k).strip(): v for k, v in (item or {}).items() if str(k).strip() in cols_db and str(k).strip() not in {'created_at','updated_at'}}
+            if not payload:
+                continue
+            if not payload.get('id'):
+                payload['id'] = str(uuid.uuid4())
+            registro_id = str(payload['id'])
+            cur.execute(f'SELECT * FROM {tabela} WHERE id = ?', (registro_id,))
+            old_row = cur.fetchone()
+            old_dict = dict(old_row) if old_row else None
+            acao = 'UPDATE' if old_dict else 'INSERT'
+            if 'updated_at' in cols_db:
+                payload['updated_at'] = _agora_sql()
+            if 'created_at' in cols_db and not payload.get('created_at'):
+                payload['created_at'] = _agora_sql()
+            cols = list(payload.keys())
+            vals = [payload[c] for c in cols]
+            if modo == 'insert':
+                cur.execute(f"INSERT INTO {tabela} ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})", tuple(vals))
+            else:
+                update_cols = [c for c in cols if c != 'id']
+                cur.execute(
+                    f"INSERT INTO {tabela} ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))}) "
+                    f"ON CONFLICT (id) DO UPDATE SET {', '.join([c + ' = EXCLUDED.' + c for c in update_cols])}",
+                    tuple(vals),
+                )
+            cur.execute(f'SELECT * FROM {tabela} WHERE id = ?', (registro_id,))
+            new_row = cur.fetchone()
+            cur.execute(
+                'INSERT INTO data_import_snapshots (id, batch_id, tabela, registro_id, acao, old_json, new_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                (str(uuid.uuid4()), batch_id, tabela, registro_id, acao, json.dumps(old_dict, ensure_ascii=False, default=str) if old_dict else None, json.dumps(dict(new_row), ensure_ascii=False, default=str) if new_row else None, _agora_sql()),
+            )
+            count += 1
+        cur.execute('UPDATE data_import_batches SET linhas = ? WHERE id = ?', (count, batch_id))
+        conn.commit()
+        return {'linhas': count, 'batch_id': batch_id}
+    except Exception:
+        _rollback_safe()
+        raise
+
+
+def reverter_carga_dados(batch_id: str, usuario_id: str | None = None):
+    batch_id = str(batch_id or '').strip()
+    if not batch_id:
+        raise ValueError('Lote inválido.')
+    _ensure_data_import_schema()
+    cur = _cursor()
+    cur.execute('SELECT * FROM data_import_batches WHERE id = ?', (batch_id,))
+    batch = cur.fetchone()
+    if not batch:
+        raise ValueError('Carga não encontrada.')
+    batch = dict(batch)
+    if int(batch.get('revertido') or 0):
+        raise ValueError('Esta carga já foi revertida.')
+    tabela = batch.get('tabela')
+    if tabela not in {'ativos','funcionarios','equipes'}:
+        raise ValueError('Tabela não liberada para reversão automática.')
+    cur.execute('SELECT * FROM data_import_snapshots WHERE batch_id = ? ORDER BY created_at DESC', (batch_id,))
+    snaps = [dict(r) for r in cur.fetchall()]
+    cols_db = _get_columns(tabela)
+    count = 0
+    try:
+        for snap in snaps:
+            registro_id = snap.get('registro_id')
+            old_json = snap.get('old_json')
+            if not old_json:
+                cur.execute(f'DELETE FROM {tabela} WHERE id = ?', (registro_id,))
+            else:
+                old = json.loads(old_json)
+                payload = {k: v for k, v in old.items() if k in cols_db}
+                cols = list(payload.keys())
+                vals = [payload[c] for c in cols]
+                update_cols = [c for c in cols if c != 'id']
+                cur.execute(
+                    f"INSERT INTO {tabela} ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))}) "
+                    f"ON CONFLICT (id) DO UPDATE SET {', '.join([c + ' = EXCLUDED.' + c for c in update_cols])}",
+                    tuple(vals),
+                )
+            count += 1
+        cur.execute('UPDATE data_import_batches SET revertido = 1, reverted_at = ? WHERE id = ?', (_agora_sql(), batch_id))
+        conn.commit()
+        try:
+            registrar_log_acao('REVERTER_CARGA_DADOS', 'DADOS', batch_id, {'tabela': tabela, 'linhas': count}, usuario_id=usuario_id)
+        except Exception:
+            pass
+        return {'linhas': count, 'batch_id': batch_id}
+    except Exception:
+        _rollback_safe()
+        raise
+
+
+def _enviar_email_assincrono(destinatario: str, assunto: str, corpo_texto: str) -> bool:
+    destinatario = str(destinatario or '').strip()
+    if not destinatario or not _smtp_configurado():
+        return False
+    try:
+        import threading
+        def _job():
+            try:
+                _enviar_email(destinatario, assunto, corpo_texto)
+            except Exception as ex:
+                print(f'[EMAIL] falha ao enviar para {destinatario}: {ex}', flush=True)
+        threading.Thread(target=_job, daemon=True).start()
+        return True
+    except Exception:
+        return False
+
+
+def enviar_link_redefinicao_usuario_email(nome: str, email: str, username: str, link: str, expires_at: str, motivo: str = 'definição de senha') -> bool:
+    nome = str(nome or '').strip() or 'Usuário'
+    corpo = f'''Olá, {nome}.
+
+Recebemos uma solicitação de {motivo} para seu acesso ao Maintenance APP.
+
+Usuário: {username}
+Link seguro: {link}
+Validade até: {expires_at}
+
+Se você não reconhece esta ação, ignore este e-mail.
+'''
+    return _enviar_email_assincrono(email, 'Link de acesso - Maintenance APP', corpo)
+
+
+def enviar_credenciais_usuario_email(nome: str, email: str, username: str, senha_temporaria: str) -> bool:
+    nome = str(nome or '').strip() or 'Usuário'
+    url = APP_BASE_URL or 'URL_DO_APP_NAO_CONFIGURADA'
+    corpo = f'''Olá, {nome}.
+
+Seu acesso ao Maintenance APP foi criado/atualizado.
+
+Usuário: {username}
+Senha temporária: {senha_temporaria}
+
+No primeiro acesso, altere a senha imediatamente.
+Link de acesso: {url}
+'''
+    return _enviar_email_assincrono(email, 'Credenciais de acesso - Maintenance APP', corpo)

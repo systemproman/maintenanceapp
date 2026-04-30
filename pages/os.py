@@ -1201,7 +1201,8 @@ def os_page():
     def abrir_form_material(os_id, atividade):
         with ui.dialog() as dialog, ui.card().classes('w-[700px] max-w-[96vw] p-5 rounded-2xl gap-4'):
             ui.label('NOVO MATERIAL').classes('text-lg font-bold text-slate-800')
-            alvo_material_id = (detalhe_os.get('os') or {}).get('componente_id') or (detalhe_os.get('os') or {}).get('equipamento_id')
+            item_os_material = db.get_os(os_id) or {}
+            alvo_material_id = item_os_material.get('componente_id') or item_os_material.get('equipamento_id')
             opcoes_pecas = []
             try:
                 opcoes_pecas = db.listar_pecas_ativo_para_material(alvo_material_id)

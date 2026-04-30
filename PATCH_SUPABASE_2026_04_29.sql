@@ -63,3 +63,29 @@ WHERE nome IN ('GESTOR', 'PLANEJADOR', 'EXECUTOR')
   );
 
 COMMIT;
+
+-- ===== HOTFIX 2026-04-30: LOTES DE CARGA / REVERSAO =====
+CREATE TABLE IF NOT EXISTS data_import_batches (
+    id TEXT PRIMARY KEY,
+    tabela TEXT NOT NULL,
+    modo TEXT NULL,
+    linhas INTEGER NOT NULL DEFAULT 0,
+    usuario_id TEXT NULL,
+    revertido INTEGER NOT NULL DEFAULT 0,
+    reverted_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS data_import_snapshots (
+    id TEXT PRIMARY KEY,
+    batch_id TEXT NOT NULL,
+    tabela TEXT NOT NULL,
+    registro_id TEXT NOT NULL,
+    acao TEXT NOT NULL,
+    old_json TEXT NULL,
+    new_json TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_data_import_batches_created ON data_import_batches(created_at);
+CREATE INDEX IF NOT EXISTS idx_data_import_snapshots_batch ON data_import_snapshots(batch_id);
